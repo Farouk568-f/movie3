@@ -497,6 +497,8 @@ const VideoPlayer: React.FC<PlayerProps> = ({ item, itemType, initialSeason, ini
         adStateRef.current = adState;
     }, [adState]);
     const adVideoRef = useRef<HTMLVideoElement>(null);
+    const totalAdTimeRef = useRef(0);
+    const lastAdTimeRef = useRef(0);
 
     const AD_SOURCES = [
         "https://media.w3.org/2010/05/sintel/trailer.mp4?utm_source=chatgpt.com",
@@ -542,9 +544,9 @@ const VideoPlayer: React.FC<PlayerProps> = ({ item, itemType, initialSeason, ini
             setTimeout(() => {
                 const controlsFocusables = Array.from(controlsPanelRef.current?.querySelectorAll('.focusable') || []) as HTMLElement[];
                 if (controlsFocusables.length > 0) {
-                    controlsFocusables[0].focus();
+                    controlsFocusables[0].focus({ preventScroll: true });
                 } else if (progressBarRef.current) {
-                    progressBarRef.current.focus();
+                    progressBarRef.current.focus({ preventScroll: true });
                 }
                 setIsOverlayVisible(true);
             }, 100);
@@ -562,18 +564,7 @@ const VideoPlayer: React.FC<PlayerProps> = ({ item, itemType, initialSeason, ini
         }
     }, []);
 
-    // Track 30-second auto skip for ads across the entire ad break
-    useEffect(() => {
-        let timeoutId: number;
-        if (adState.isActive) {
-            timeoutId = window.setTimeout(() => {
-                triggerAdAutoSkip();
-            }, 30000);
-        }
-        return () => {
-            if (timeoutId) clearTimeout(timeoutId);
-        };
-    }, [adState.isActive, triggerAdAutoSkip]);
+
 
     const [isBuffering, setIsBuffering] = useState(true);
     const [isOverlayVisible, setIsOverlayVisible] = useState(true);
@@ -996,6 +987,8 @@ const VideoPlayer: React.FC<PlayerProps> = ({ item, itemType, initialSeason, ini
             
             // Ad trigger logic (5 minutes = 300 seconds)
             if (!adStateRef.current.hasPlayedInSession && !adStateRef.current.isActive && video.currentTime >= 300) {
+                totalAdTimeRef.current = 0;
+                lastAdTimeRef.current = 0;
                 setAdState(prev => ({ ...prev, isActive: true, skipCountdown: 5, adProgress: 0 }));
                 video.pause();
             }
@@ -1115,13 +1108,13 @@ const VideoPlayer: React.FC<PlayerProps> = ({ item, itemType, initialSeason, ini
                     setIsOverlayVisible(true);
                     
                     if (isSkipVisible && skipButton) {
-                        skipButton.focus();
+                        skipButton.focus({ preventScroll: true });
                     } else if (controlsFocusables.length > 0) {
-                        controlsFocusables[0].focus();
+                        controlsFocusables[0].focus({ preventScroll: true });
                     } else if (progressFocusable) {
-                        progressFocusable.focus();
+                        progressFocusable.focus({ preventScroll: true });
                     } else if (infoFocusables.length > 0) {
-                        infoFocusables[0].focus();
+                        infoFocusables[0].focus({ preventScroll: true });
                     }
                 }
                 return;
@@ -1137,7 +1130,7 @@ const VideoPlayer: React.FC<PlayerProps> = ({ item, itemType, initialSeason, ini
                 if (isSkipVisible && allTopControls.includes(active)) {
                     e.preventDefault();
                     e.stopPropagation();
-                    skipButton.focus();
+                    skipButton.focus({ preventScroll: true });
                     return;
                 }
             }
@@ -1145,7 +1138,7 @@ const VideoPlayer: React.FC<PlayerProps> = ({ item, itemType, initialSeason, ini
                 if (isSkipVisible && active === skipButton) {
                    e.preventDefault();
                    e.stopPropagation();
-                   (lastFocusedControlRef.current || controlsFocusables[0])?.focus();
+                   (lastFocusedControlRef.current || controlsFocusables[0])?.focus({ preventScroll: true });
                    return;
                }
            }
@@ -1473,6 +1466,16 @@ const VideoPlayer: React.FC<PlayerProps> = ({ item, itemType, initialSeason, ini
                             const adCur = target.currentTime;
                             const pct = (adCur / adDur) * 100;
                             
+                            const delta = adCur - lastAdTimeRef.current;
+                            if (delta > 0 && delta < 1) { // Normal playback
+                                totalAdTimeRef.current += delta;
+                            }
+                            lastAdTimeRef.current = adCur;
+
+                            if (totalAdTimeRef.current >= 30) {
+                                triggerAdAutoSkip();
+                            }
+
                             let newCountdown = Math.max(0, 5 - Math.floor(adCur));
                             setAdState(prev => ({
                                 ...prev,
@@ -1500,9 +1503,9 @@ const VideoPlayer: React.FC<PlayerProps> = ({ item, itemType, initialSeason, ini
                                 setTimeout(() => {
                                     const controlsFocusables = Array.from(controlsPanelRef.current?.querySelectorAll('.focusable') || []) as HTMLElement[];
                                     if (controlsFocusables.length > 0) {
-                                        controlsFocusables[0].focus();
+                                        controlsFocusables[0].focus({ preventScroll: true });
                                     } else if (progressBarRef.current) {
-                                        progressBarRef.current.focus();
+                                        progressBarRef.current.focus({ preventScroll: true });
                                     }
                                     setIsOverlayVisible(true);
                                 }, 100);
@@ -1535,9 +1538,9 @@ const VideoPlayer: React.FC<PlayerProps> = ({ item, itemType, initialSeason, ini
                                     setTimeout(() => {
                                         const controlsFocusables = Array.from(controlsPanelRef.current?.querySelectorAll('.focusable') || []) as HTMLElement[];
                                         if (controlsFocusables.length > 0) {
-                                            controlsFocusables[0].focus();
+                                            controlsFocusables[0].focus({ preventScroll: true });
                                         } else if (progressBarRef.current) {
-                                            progressBarRef.current.focus();
+                                            progressBarRef.current.focus({ preventScroll: true });
                                         }
                                         setIsOverlayVisible(true);
                                     }, 100);
