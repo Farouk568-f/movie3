@@ -562,6 +562,19 @@ const VideoPlayer: React.FC<PlayerProps> = ({ item, itemType, initialSeason, ini
         }
     }, []);
 
+    // Track 30-second auto skip for ads across the entire ad break
+    useEffect(() => {
+        let timeoutId: number;
+        if (adState.isActive) {
+            timeoutId = window.setTimeout(() => {
+                triggerAdAutoSkip();
+            }, 30000);
+        }
+        return () => {
+            if (timeoutId) clearTimeout(timeoutId);
+        };
+    }, [adState.isActive, triggerAdAutoSkip]);
+
     const [isBuffering, setIsBuffering] = useState(true);
     const [isOverlayVisible, setIsOverlayVisible] = useState(true);
     const [isRecsFocused, setIsRecsFocused] = useState(false);
@@ -1138,8 +1151,10 @@ const VideoPlayer: React.FC<PlayerProps> = ({ item, itemType, initialSeason, ini
            }
 
             if (!isOverlayVisible) {
-                if (e.key === 'ArrowDown') {
+                if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.key)) {
                     e.preventDefault();
+                }
+                if (e.key === 'ArrowDown') {
                     e.stopPropagation();
                     setIsOverlayVisible(true);
                 } else if (e.key === 'Enter' || e.key === ' ') {
@@ -1153,19 +1168,17 @@ const VideoPlayer: React.FC<PlayerProps> = ({ item, itemType, initialSeason, ini
             const arrowKeys = ['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Enter', ' '];
              if (!arrowKeys.includes(e.key) || (document.activeElement?.tagName === 'INPUT')) return;
              
-            e.stopPropagation();
+             e.stopPropagation();
+             if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', ' '].includes(e.key)) {
+                 e.preventDefault();
+             }
 
             if (e.key === 'ArrowUp' && (allTopControls.includes(active) || controlsFocusables.includes(active))) {
-                e.preventDefault();
                 setIsOverlayVisible(false);
                 if (document.activeElement instanceof HTMLElement) {
                     document.activeElement.blur();
                 }
                 return;
-            }
-
-            if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.key)) {
-                e.preventDefault();
             }
 
             const seek = (offset: number) => {
@@ -1467,11 +1480,6 @@ const VideoPlayer: React.FC<PlayerProps> = ({ item, itemType, initialSeason, ini
                                 canSkip: newCountdown === 0,
                                 skipCountdown: newCountdown
                             }));
-
-                            // Auto skip if 30 continuous seconds of playback have passed
-                            if (adCur >= 30) {
-                                triggerAdAutoSkip();
-                            }
                         }}
                         onEnded={() => {
                             if (adState.adIndex < AD_SOURCES.length - 1) {
