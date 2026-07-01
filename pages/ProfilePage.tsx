@@ -57,7 +57,18 @@ const ProfileCard: React.FC<{
     
     if (isAddButton) {
         return (
-            <div className={baseClasses} onClick={onClick} onKeyDown={(e) => e.key === 'Enter' && onClick()} tabIndex={0}>
+            <div 
+                className={baseClasses} 
+                onClick={onClick} 
+                onKeyDown={(e) => {
+                    if (e.key === 'Enter') {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        onClick();
+                    }
+                }} 
+                tabIndex={0}
+            >
                 <div className={`${imageContainerClasses} overflow-hidden flex items-center justify-center group-hover:scale-105 group-focus-within:scale-105`}>
                      <div className="w-full h-full flex items-center justify-center bg-transparent group-hover:bg-zinc-800 group-focus-within:bg-zinc-800 transition-colors rounded-md">
                         <i className="fas fa-plus-circle text-6xl md:text-8xl text-gray-400 group-hover:text-white group-focus-within:text-white transition-colors"></i>
@@ -77,7 +88,13 @@ const ProfileCard: React.FC<{
         <div 
             className={baseClasses} 
             onClick={onClick} 
-            onKeyDown={(e) => e.key === 'Enter' && onClick()} 
+            onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    onClick();
+                }
+            }} 
             tabIndex={0}
             onMouseEnter={() => isKids && setActiveWormId(profile.id)}
             onFocus={() => isKids && setActiveWormId(profile.id)}
@@ -135,7 +152,7 @@ const AvatarGrid: React.FC<{ onSelect: (avatar: string) => void; onBack: () => v
                  />
              </div>
             <div className="w-full max-w-5xl mt-24">
-                 <button onClick={onBack} className="flex items-center gap-2 text-zinc-300 hover:text-white transition-colors text-lg mb-4">
+                 <button onClick={onBack} className="flex items-center gap-2 text-zinc-300 hover:text-white transition-colors text-lg mb-4 focusable">
                      <i className="fas fa-arrow-left"></i>
                      <span>{t('editProfile')}</span>
                  </button>
@@ -143,7 +160,19 @@ const AvatarGrid: React.FC<{ onSelect: (avatar: string) => void; onBack: () => v
             </div>
             <div className="grid grid-cols-4 sm:grid-cols-6 md:grid-cols-8 gap-4 w-full max-w-5xl mt-8">
                 {PROFILE_AVATARS.map(avatar => (
-                    <div key={avatar} onClick={() => onSelect(avatar)} className="aspect-square rounded-md overflow-hidden cursor-pointer transition-transform hover:scale-110 border-4 border-transparent hover:border-white">
+                    <div 
+                        key={avatar} 
+                        tabIndex={0} 
+                        onClick={() => onSelect(avatar)} 
+                        onKeyDown={(e) => { 
+                            if (e.key === 'Enter') { 
+                                e.preventDefault(); 
+                                e.stopPropagation(); 
+                                onSelect(avatar); 
+                            } 
+                        }} 
+                        className="aspect-square rounded-md overflow-hidden cursor-pointer transition-transform hover:scale-110 border-4 border-transparent hover:border-white focusable focus:scale-110 focus:border-white outline-none"
+                    >
                         <img src={avatar} alt="avatar" className="w-full h-full object-cover"/>
                     </div>
                 ))}
@@ -164,6 +193,25 @@ const ProfilePage: React.FC = () => {
 
     const [activeWormId, setActiveWormId] = useState<string | null>(null);
 
+    // Auto-focus the first focusable element when view, isManaging, or showAvatarPicker changes to keep D-pad focus active
+    useEffect(() => {
+        const timer = setTimeout(() => {
+            if (view === 'form' && !showAvatarPicker) {
+                // Focus the name input
+                const nameInput = document.querySelector('input[type="text"]') as HTMLElement;
+                if (nameInput) {
+                    nameInput.focus();
+                    return;
+                }
+            }
+            const firstFocusable = document.querySelector('.focusable') as HTMLElement;
+            if (firstFocusable) {
+                firstFocusable.focus();
+            }
+        }, 150);
+        return () => clearTimeout(timer);
+    }, [view, isManaging, showAvatarPicker]);
+
     // Automatically set initial activeWormId to the first KIDS profile if available
     useEffect(() => {
         if (accountData?.screens) {
@@ -178,6 +226,7 @@ const ProfilePage: React.FC = () => {
     const [name, setName] = useState('');
     const [isKids, setIsKids] = useState(false);
     const [avatar, setAvatar] = useState('');
+    const [geminiApiKey, setGeminiApiKey] = useState('');
 
     useEffect(() => {
         if (activeProfile) {
@@ -199,9 +248,11 @@ const ProfilePage: React.FC = () => {
                 setName(profileToEdit.name);
                 setIsKids(profileToEdit.type === 'KIDS');
                 setAvatar(profileToEdit.avatar);
+                setGeminiApiKey(profileToEdit.geminiApiKey || '');
             } else { // Adding
                 setName('');
                 setIsKids(false);
+                setGeminiApiKey('');
                 const usedAvatars = accountData?.screens.map(p => p.avatar) || [];
                 const availableAvatars = PROFILE_AVATARS.filter(a => !usedAvatars.includes(a) && a !== KIDS_AVATAR);
                 const randomAvatar = availableAvatars.length > 0
@@ -245,10 +296,11 @@ const ProfilePage: React.FC = () => {
             updateProfile(profileToEdit.id, {
                 name: name.trim(),
                 type: isKids ? 'KIDS' : 'ADULT',
-                avatar: avatar
+                avatar: avatar,
+                geminiApiKey: geminiApiKey.trim()
             });
         } else {
-            addProfile({ name: name.trim(), type: isKids ? 'KIDS' : 'ADULT', avatar: avatar });
+            addProfile({ name: name.trim(), type: isKids ? 'KIDS' : 'ADULT', avatar: avatar, geminiApiKey: geminiApiKey.trim() });
         }
         setView('select');
         setProfileToEdit(null);
@@ -300,9 +352,20 @@ const ProfilePage: React.FC = () => {
                         <h1 className="text-4xl md:text-5xl font-normal mb-6">{t('editProfile')}</h1>
                         <div className="border-y border-gray-700 py-6">
                             <div className="flex flex-col sm:flex-row items-center gap-4 sm:gap-6">
-                                <div className="relative flex-shrink-0 group cursor-pointer" onClick={() => setShowAvatarPicker(true)}>
+                                <div 
+                                    tabIndex={0} 
+                                    className="relative flex-shrink-0 group cursor-pointer focusable focus:scale-105 outline-none rounded-md" 
+                                    onClick={() => setShowAvatarPicker(true)} 
+                                    onKeyDown={(e) => {
+                                        if (e.key === 'Enter') {
+                                            e.preventDefault();
+                                            e.stopPropagation();
+                                            setShowAvatarPicker(true);
+                                        }
+                                    }}
+                                >
                                     <img src={avatar} alt="Profile Avatar" className="w-28 h-28 md:w-36 md:h-36 rounded-md object-cover" />
-                                    <div className="absolute inset-0 bg-black/50 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity">
+                                    <div className="absolute inset-0 bg-black/50 flex items-center justify-center opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 transition-opacity rounded-md">
                                         <i className="fas fa-pencil-alt text-2xl text-white"></i>
                                     </div>
                                 </div>
@@ -312,8 +375,9 @@ const ProfilePage: React.FC = () => {
                                         value={name}
                                         onChange={e => setName(e.target.value)}
                                         placeholder={t('name')}
-                                        className="w-full bg-gray-600 px-4 py-3 text-lg text-white placeholder-gray-400 focus:outline-none rounded-sm"
+                                        className="w-full bg-gray-600 px-4 py-3 text-lg text-white placeholder-gray-400 focus:outline-none rounded-sm focusable"
                                         required
+                                        autoFocus
                                     />
                                      <div className="flex items-center gap-3">
                                         <input
@@ -327,13 +391,24 @@ const ProfilePage: React.FC = () => {
                                                     setAvatar(KIDS_AVATAR);
                                                 }
                                             }}
-                                            className="w-6 h-6 bg-gray-600 border-gray-500 rounded-sm focus:ring-0"
+                                            onKeyDown={(e) => {
+                                                if (e.key === 'Enter') {
+                                                    e.preventDefault();
+                                                    e.stopPropagation();
+                                                    const nextVal = !isKids;
+                                                    setIsKids(nextVal);
+                                                    if (nextVal) {
+                                                        setAvatar(KIDS_AVATAR);
+                                                    }
+                                                }
+                                            }}
+                                            className="w-6 h-6 bg-gray-600 border-gray-500 rounded-sm focus:ring-0 focusable"
                                         />
                                         <label htmlFor="kids-checkbox" className="text-lg text-gray-300">{t('kidQuestionMark')}</label>
                                     </div>
                                     <div className="space-y-2">
                                         <label className="text-gray-400">{t('languageLabel')}</label>
-                                        <select className="bg-black border border-gray-400 text-white text-sm rounded-sm focus:ring-white focus:border-white block w-full p-2.5">
+                                        <select className="bg-black border border-gray-400 text-white text-sm rounded-sm focus:ring-white focus:border-white block w-full p-2.5 focusable">
                                             <option>English</option>
                                             <option>العربية</option>
                                         </select>
@@ -342,17 +417,28 @@ const ProfilePage: React.FC = () => {
                                         <label className="text-gray-400">{t('maturitySettings')}</label>
                                         <div className="bg-gray-700 text-white font-semibold p-2 rounded-sm w-full text-left">{t('allMaturityRatings')}</div>
                                     </div>
+                                    <div className="space-y-2">
+                                        <label htmlFor="gemini-key-input-edit" className="text-gray-400">{t('geminiApiKeyLabel')}</label>
+                                        <input
+                                            id="gemini-key-input-edit"
+                                            type="text"
+                                            value={geminiApiKey}
+                                            onChange={e => setGeminiApiKey(e.target.value)}
+                                            placeholder={t('geminiApiKeyPlaceholder')}
+                                            className="w-full bg-gray-600 px-4 py-3 text-lg text-white placeholder-gray-400 focus:outline-none rounded-sm focusable"
+                                        />
+                                    </div>
                                 </div>
                             </div>
                         </div>
                         <div className="mt-8 flex flex-col sm:flex-row items-center gap-4">
-                            <button type="submit" className="w-full sm:w-auto px-10 py-2.5 text-lg font-semibold bg-white text-black uppercase tracking-widest hover:bg-red-600 hover:text-white transition-colors">
+                            <button type="submit" className="w-full sm:w-auto px-10 py-2.5 text-lg font-semibold bg-white text-black uppercase tracking-widest hover:bg-red-600 hover:text-white transition-colors focusable">
                                 {t('save')}
                             </button>
-                            <button type="button" onClick={handleCancelForm} className="w-full sm:w-auto px-10 py-2.5 text-lg font-semibold bg-transparent text-gray-400 border border-gray-600 uppercase tracking-widest hover:border-white hover:text-white transition-colors">
+                            <button type="button" onClick={handleCancelForm} className="w-full sm:w-auto px-10 py-2.5 text-lg font-semibold bg-transparent text-gray-400 border border-gray-600 uppercase tracking-widest hover:border-white hover:text-white transition-colors focusable">
                                 {t('cancel')}
                             </button>
-                            <button type="button" onClick={handleDeleteProfile} className="w-full sm:w-auto px-10 py-2.5 text-lg font-semibold bg-transparent text-gray-400 border border-gray-600 uppercase tracking-widest hover:border-white hover:text-white transition-colors">
+                            <button type="button" onClick={handleDeleteProfile} className="w-full sm:w-auto px-10 py-2.5 text-lg font-semibold bg-transparent text-gray-400 border border-gray-600 uppercase tracking-widest hover:border-white hover:text-white transition-colors focusable">
                                 {t('deleteProfile')}
                             </button>
                         </div>
@@ -374,9 +460,20 @@ const ProfilePage: React.FC = () => {
                         <h1 className="text-4xl md:text-5xl font-normal">{t('addProfile')}</h1>
                         <p className="text-lg text-gray-400 mt-2 mb-6">{t('addProfileSubtitle')}</p>
                         <div className="flex flex-col sm:flex-row items-center gap-4 sm:gap-6 border-y border-gray-700 py-6">
-                            <div className="relative flex-shrink-0 group cursor-pointer" onClick={() => setShowAvatarPicker(true)}>
+                            <div 
+                                tabIndex={0} 
+                                className="relative flex-shrink-0 group cursor-pointer focusable focus:scale-105 outline-none rounded-md" 
+                                onClick={() => setShowAvatarPicker(true)} 
+                                onKeyDown={(e) => {
+                                    if (e.key === 'Enter') {
+                                        e.preventDefault();
+                                        e.stopPropagation();
+                                        setShowAvatarPicker(true);
+                                    }
+                                }}
+                            >
                                 <img src={avatar} alt="Profile Avatar" className="w-28 h-28 md:w-36 md:h-36 rounded-md object-cover flex-shrink-0" />
-                                <div className="absolute inset-0 bg-black/50 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity">
+                                <div className="absolute inset-0 bg-black/50 flex items-center justify-center opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 transition-opacity rounded-md">
                                     <i className="fas fa-pencil-alt text-2xl text-white"></i>
                                 </div>
                             </div>
@@ -386,7 +483,7 @@ const ProfilePage: React.FC = () => {
                                     value={name}
                                     onChange={e => setName(e.target.value)}
                                     placeholder={t('name')}
-                                    className="w-full bg-gray-600 px-4 py-3 text-lg text-white placeholder-gray-400 focus:outline-none rounded-sm"
+                                    className="w-full bg-gray-600 px-4 py-3 text-lg text-white placeholder-gray-400 focus:outline-none rounded-sm focusable"
                                     required
                                     autoFocus
                                 />
@@ -402,17 +499,38 @@ const ProfilePage: React.FC = () => {
                                                 setAvatar(KIDS_AVATAR);
                                             }
                                         }}
-                                        className="w-8 h-8 bg-gray-800 border-gray-600"
+                                        onKeyDown={(e) => {
+                                            if (e.key === 'Enter') {
+                                                e.preventDefault();
+                                                e.stopPropagation();
+                                                const nextVal = !isKids;
+                                                setIsKids(nextVal);
+                                                if (nextVal) {
+                                                    setAvatar(KIDS_AVATAR);
+                                                }
+                                            }
+                                        }}
+                                        className="w-8 h-8 bg-gray-800 border-gray-600 focusable"
                                     />
                                     <label htmlFor="kids-checkbox" className="text-lg text-gray-300">{t('kidQuestionMark')}</label>
                                 </div>
+                                <div className="space-y-2 mt-4">
+                                    <label htmlFor="gemini-key-input-add" className="text-gray-400">{t('geminiApiKeyLabel')}</label>
+                                    <input
+                                        id="gemini-key-input-add"
+                                        type="text"
+                                        value={geminiApiKey}
+                                        onChange={e => setGeminiApiKey(e.target.value)}
+                                        placeholder={t('geminiApiKeyPlaceholder')}
+                                        className="w-full bg-gray-600 px-4 py-3 text-lg text-white placeholder-gray-400 focus:outline-none rounded-sm focusable"
+                                    />
+                                </div> </div>
                             </div>
-                        </div>
                         <div className="mt-8 flex flex-col sm:flex-row items-center gap-4">
-                            <button type="submit" className="w-full sm:w-auto px-10 py-3 text-xl font-semibold bg-red-600 text-white uppercase tracking-widest hover:bg-red-700 transition-colors">
+                            <button type="submit" className="w-full sm:w-auto px-10 py-3 text-xl font-semibold bg-red-600 text-white uppercase tracking-widest hover:bg-red-700 transition-colors focusable">
                                 {t('continue')}
                             </button>
-                            <button type="button" onClick={handleCancelForm} className="w-full sm:w-auto px-10 py-3 text-xl font-semibold bg-transparent text-gray-400 border border-gray-600 uppercase tracking-widest hover:border-white hover:text-white transition-colors">
+                            <button type="button" onClick={handleCancelForm} className="w-full sm:w-auto px-10 py-3 text-xl font-semibold bg-transparent text-gray-400 border border-gray-600 uppercase tracking-widest hover:border-white hover:text-white transition-colors focusable">
                                 {t('cancel')}
                             </button>
                         </div>
