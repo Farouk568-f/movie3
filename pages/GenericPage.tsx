@@ -321,7 +321,9 @@ const GenericPage: React.FC<{
             const firstCard = resultsContainerRef.current?.querySelector('.focusable') as HTMLElement;
             if (firstCard) {
                 firstCard.focus();
-                firstCard.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+                // TV browsers are laggy with smooth scrolling. Snappy instant scrolling is standard.
+                const isTV = typeof navigator !== 'undefined' && /SmartTV|Tizen|Web0S|AppleTV|AndroidTV|TV|PlayStation/i.test(navigator.userAgent);
+                firstCard.scrollIntoView({ behavior: isTV ? 'auto' : 'smooth', block: 'nearest' });
             }
         }
     };
