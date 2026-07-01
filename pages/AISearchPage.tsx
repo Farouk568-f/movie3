@@ -202,7 +202,9 @@ const AISearchPage: React.FC = () => {
     };
 
     useEffect(() => {
-        chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+        // TV browsers are laggy with smooth scrolling. Snappy instant scrolling is standard.
+        const isTV = typeof navigator !== 'undefined' && /SmartTV|Tizen|Web0S|AppleTV|AndroidTV|TV|PlayStation/i.test(navigator.userAgent);
+        chatEndRef.current?.scrollIntoView({ behavior: isTV ? 'auto' : 'smooth' });
     }, [messages, isLoading, isKeyboardVisible]);
 
     const doSearch = async (query: string) => {
