@@ -1,105 +1,81 @@
-import http from "http";
-import https from "https";
-import { URL } from "url";
+export const config = {
+  runtime: 'edge',
+};
 
-export default function handler(req: any, res: any) {
-  // CORS Headers
-  res.setHeader("Access-Control-Allow-Origin", "*");
-  res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
-  res.setHeader("Access-Control-Allow-Headers", "*");
-  
-  if (req.method === "OPTIONS") {
-    return res.status(200).end();
-  }
-
-  const targetUrl = req.query.url as string;
-  if (!targetUrl) {
-    return res.status(400).send("Missing url parameter");
-  }
-
-  let activeRemoteRequest: any = null;
-
-  const fetchWithRedirects = (currentUrl: string, redirectCount: number = 0) => {
-    if (redirectCount > 5) {
-      console.error("[Live Proxy Vercel] Too many redirects");
-      return res.status(508).send("Too many redirects");
-    }
-
-    try {
-      const parsedUrl = new URL(currentUrl);
-      const client = parsedUrl.protocol === "https:" ? https : http;
-
-      console.log(`[Live Proxy Vercel] Requesting: ${currentUrl} (Redirect depth: ${redirectCount})`);
-
-      const requestOptions = {
-        headers: {
-          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/110.0.0.0 Safari/537.36',
-          ...(req.headers['range'] ? { 'Range': req.headers['range'] as string } : {})
-        }
-      };
-
-      const remoteRequest = client.get(currentUrl, requestOptions, (remoteResponse) => {
-        const statusCode = remoteResponse.statusCode || 200;
-        console.log(`[Live Proxy Vercel] Remote response status: ${statusCode} for ${currentUrl}`);
-
-        // Handle redirects (301, 302, 307, 308)
-        if (statusCode >= 300 && statusCode < 400 && remoteResponse.headers.location) {
-          let nextUrl = remoteResponse.headers.location;
-          if (!nextUrl.startsWith("http://") && !nextUrl.startsWith("https://")) {
-            // Resolve relative URL
-            nextUrl = new URL(nextUrl, currentUrl).toString();
-          }
-          console.log(`[Live Proxy Vercel] Following redirect to: ${nextUrl}`);
-          remoteRequest.destroy();
-          fetchWithRedirects(nextUrl, redirectCount + 1);
-          return;
-        }
-
-        // Copy headers to allow range requests and video streaming
-        if (remoteResponse.headers["content-type"]) {
-          res.setHeader("Content-Type", remoteResponse.headers["content-type"]);
-        } else {
-          res.setHeader("Content-Type", "video/mp2t"); // Default for .ts streams
-        }
-
-        if (remoteResponse.headers["content-length"]) {
-          res.setHeader("Content-Length", remoteResponse.headers["content-length"]);
-        }
-
-        if (remoteResponse.headers["content-range"]) {
-          res.setHeader("Content-Range", remoteResponse.headers["content-range"]);
-        }
-
-        if (remoteResponse.headers["accept-ranges"]) {
-          res.setHeader("Accept-Ranges", remoteResponse.headers["accept-ranges"]);
-        }
-
-        res.status(statusCode);
-        remoteResponse.pipe(res);
-      });
-
-      activeRemoteRequest = remoteRequest;
-
-      remoteRequest.on("error", (err: any) => {
-        console.error(`[Live Proxy Vercel] Remote stream error for ${currentUrl}:`, err.message);
-        if (!res.headersSent) {
-          res.status(500).send("Proxy error fetching stream");
-        }
-      });
-
-    } catch (error: any) {
-      console.error("[Live Proxy Vercel] Error:", error.message);
-      if (!res.headersSent) {
-        res.status(400).send("Invalid URL or stream error");
-      }
-    }
+export default async function handler(req: Request) {
+  const corsHeaders = {
+    "Access-Control-Allow-Origin": "*",
+    "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+    "Access-Control-Allow-Headers": "*",
   };
 
-  fetchWithRedirects(targetUrl);
+  if (req.method === "OPTIONS") {
+    return new Response(null, {
+      status: 200,
+      headers: corsHeaders,
+    });
+  }
 
-  req.on("close", () => {
-    if (activeRemoteRequest) {
-      activeRemoteRequest.destroy();
+  const urlObj = new URL(req.url);
+  const targetUrl = urlObj.searchParams.get("url");
+
+  if (!targetUrl) {
+    return new Response("Missing url parameter", { status: 400, headers: corsHeaders });
+  }
+
+  try {
+    console.log(`[Live Proxy Edge] Fetching stream: ${targetUrl}`);
+    
+    const requestHeaders = new Headers();
+    requestHeaders.set(
+      "User-Agent",
+      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/110.0.0.0 Safari/537.36"
+    );
+    
+    const rangeHeader = req.headers.get("range");
+    if (rangeHeader) {
+      requestHeaders.set("Range", rangeHeader);
     }
-  });
+
+    const response = await fetch(targetUrl, {
+      headers: requestHeaders,
+      redirect: "follow",
+    });
+
+    const newHeaders = new Headers();
+    for (const [key, value] of Object.entries(corsHeaders)) {
+      newHeaders.set(key, value);
+    }
+
+    // Set streaming and buffering headers to bypass any intermediate buffering layers
+    newHeaders.set("X-Accel-Buffering", "no");
+    newHeaders.set("Cache-Control", "no-cache, no-transform");
+    newHeaders.set("Connection", "keep-alive");
+
+    // Copy essential media headers from remote response
+    const copyHeaders = ["content-type", "content-length", "content-range", "accept-ranges"];
+    for (const headerName of copyHeaders) {
+      const val = response.headers.get(headerName);
+      if (val) {
+        newHeaders.set(headerName, val);
+      }
+    }
+
+    // Default for MPEG-TS stream if content-type is missing/generic
+    if (!newHeaders.get("content-type") || newHeaders.get("content-type") === "application/octet-stream") {
+      newHeaders.set("content-type", "video/mp2t");
+    }
+
+    return new Response(response.body, {
+      status: response.status,
+      statusText: response.statusText,
+      headers: newHeaders,
+    });
+  } catch (error: any) {
+    console.error("[Live Proxy Edge] Error:", error.message);
+    return new Response(`Proxy error: ${error.message}`, {
+      status: 500,
+      headers: corsHeaders,
+    });
+  }
 }
