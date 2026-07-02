@@ -81,7 +81,18 @@ const ChannelListPanel: React.FC<{
             onClick={() => onSelect(index)}
             className="w-full flex items-center gap-4 p-3 my-1 rounded-lg text-left transition-colors duration-200 focus:outline-none focus:bg-white/20 hover:bg-white/10"
           >
-            <img src={channel.logo} alt={channel.name} className="w-16 h-12 object-contain flex-shrink-0 rounded-md bg-zinc-700 p-1" />
+            <img 
+              src={channel.logo} 
+              alt={channel.name} 
+              className="w-16 h-12 object-contain flex-shrink-0 rounded-md bg-zinc-700 p-1" 
+              onError={(e) => {
+                const target = e.currentTarget;
+                target.onerror = null;
+                const cleanName = channel.name.replace(/^(AR|FR|EN|ES|DE|IT|UK|US|MA|TN|DZ|LY|SY|LB|ZA|PT|TR|AL|PL|RO|RU|KSA|OSN|beIN|MBC|TOD|BTV|OCS|Starz|Dragon|Hulu|Skyflix|ART|Rotana|ON|DMC|CBC|Al Alhy|Zamalek|Nile|Sada Elbalad|Star|Paramount|Comedy|TNT|HBO|ESPN|Fox|Sony|ZDF|RTL|SAT|Pro7|Super RTL|Vox|VOX|Kika|Arte|TF1|M6|W9|RMC|BFM|LCI|DAZN|TMC|France)\s*:\s*/i, '').trim();
+                const letter = cleanName.charAt(0).toUpperCase() || '📺';
+                target.src = `data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" width="100" height="100"><rect width="100" height="100" rx="10" fill="%23eab308"/><text x="50" y="55" font-family="sans-serif" font-size="45" font-weight="bold" fill="%23000000" text-anchor="middle" dominant-baseline="middle">${letter}</text></svg>`;
+              }}
+            />
             <span className="text-white font-semibold truncate">{channel.name}</span>
           </button>
         ))}
@@ -97,7 +108,7 @@ const IframePlayerPage: React.FC = () => {
     const [unmuted, setUnmuted] = useState(false);
     const [isChannelListVisible, setIsChannelListVisible] = useState(false);
 
-    const { item, streamUrl, liveChannels, currentChannelIndex, logo } = location.state || {};
+    const { item, streamUrl, liveChannels, currentChannelIndex, logo, hideLogo } = location.state || {};
 
     const backButtonRef = useRef<HTMLButtonElement>(null);
     const unmuteButtonRef = useRef<HTMLButtonElement>(null);
@@ -137,6 +148,7 @@ const IframePlayerPage: React.FC = () => {
             liveChannels: liveChannels,
             currentChannelIndex: index,
             logo: nextChannel.logo,
+            hideLogo: hideLogo,
         };
 
         if (nextChannel.playerType === 'iframe') {
@@ -187,8 +199,19 @@ const IframePlayerPage: React.FC = () => {
                     </button>
 
                     <div className="absolute left-1/2 -translate-x-1/2 pointer-events-none">
-                    {logo && (
-                        <img src={logo} alt={`${item.name} logo`} className="h-20 max-w-[240px] object-contain drop-shadow-[0_4px_8px_rgba(0,0,0,0.8)]" />
+                    {(!hideLogo && logo) && (
+                        <img 
+                          src={logo} 
+                          alt={`${item.name} logo`} 
+                          className="h-20 max-w-[240px] object-contain drop-shadow-[0_4px_8px_rgba(0,0,0,0.8)]" 
+                          onError={(e) => {
+                            const target = e.currentTarget;
+                            target.onerror = null;
+                            const cleanName = item.name.replace(/^(AR|FR|EN|ES|DE|IT|UK|US|MA|TN|DZ|LY|SY|LB|ZA|PT|TR|AL|PL|RO|RU|KSA|OSN|beIN|MBC|TOD|BTV|OCS|Starz|Dragon|Hulu|Skyflix|ART|Rotana|ON|DMC|CBC|Al Alhy|Zamalek|Nile|Sada Elbalad|Star|Paramount|Comedy|TNT|HBO|ESPN|Fox|Sony|ZDF|RTL|SAT|Pro7|Super RTL|Vox|VOX|Kika|Arte|TF1|M6|W9|RMC|BFM|LCI|DAZN|TMC|France)\s*:\s*/i, '').trim();
+                            const letter = cleanName.charAt(0).toUpperCase() || '📺';
+                            target.src = `data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" width="100" height="100"><rect width="100" height="100" rx="10" fill="%23eab308"/><text x="50" y="55" font-family="sans-serif" font-size="45" font-weight="bold" fill="%23000000" text-anchor="middle" dominant-baseline="middle">${letter}</text></svg>`;
+                          }}
+                        />
                     )}
                     </div>
 
