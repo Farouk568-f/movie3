@@ -906,11 +906,13 @@ const VideoPlayer: React.FC<PlayerProps> = ({ item, itemType, initialSeason, ini
                 isLive: true,
                 url: activeStreamUrl,
             }, {
-                enableWorker: false,
+                enableWorker: true,
                 lazyLoad: false,
                 liveBufferLatencyChasing: true,
-                liveBufferLatencyMaxLatency: 3,
-                liveBufferLatencyMinRemain: 1
+                liveBufferLatencyMaxLatency: 15,
+                liveBufferLatencyMinRemain: 4,
+                enableStashBuffer: true,
+                stashInitialSize: 384 * 1024,
             });
             mpegtsRef.current = player;
             
