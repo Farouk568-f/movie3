@@ -53,6 +53,15 @@ async function startServer() {
     }
   });
 
+  // Ugeen-specific proxy to match the Vercel rewrite behavior locally
+  app.get("/proxy-ugeen/*", (req, res) => {
+    const path = req.originalUrl.replace("/proxy-ugeen/", "");
+    const targetUrl = `http://ugeen.live:8080/${path}`;
+    
+    // Redirect to the live-proxy locally so it streams properly in the dev environment
+    res.redirect(302, `/api/live-proxy?url=${encodeURIComponent(targetUrl)}`);
+  });
+
   // API 3: Live Video Stream Proxy (resolves CORS and mixed content HTTP/HTTPS blocks)
   app.get("/api/live-proxy", (req, res) => {
     const targetUrl = req.query.url as string;
