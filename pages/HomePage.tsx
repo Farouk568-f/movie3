@@ -84,76 +84,54 @@ const AmbientBackground: React.FC<{ imageUrl: string | null }> = ({
   );
 };
 
-const Hero: React.FC<{ movie: Movie | null; isKids: boolean }> = ({
-  movie,
+const HERO_ROTATION_INTERVAL_MS = 5 * 60 * 1000; // Rotate hero slide every 5 minutes
+
+interface HeroSlide {
+  backdropUrl: string;
+  logoUrl: string | null;
+  titleText: string;
+  badge: string;
+  metaParts: string[];
+  ratingBadge: string;
+  comingSoonText?: string;
+}
+
+const REGULAR_DEFAULT_SLIDE: HeroSlide = {
+  backdropUrl:
+    "https://images.squarespace-cdn.com/content/v1/56a1633ac21b86f80ddeacb4/106a6346-2ebd-4353-8bb4-b8a5e32320b2/squid+game+2+banner.jpg",
+  logoUrl: "https://i.ibb.co/B5PW9wnh/pngimg-com-squid-game-PNG35-1.png",
+  titleText: "Squid Game",
+  badge: "SERIES",
+  metaParts: ["Show", "Thriller", "2025", "3 seasons"],
+  ratingBadge: "TV-MA",
+  comingSoonText: "Coming June 27",
+};
+
+const KIDS_DEFAULT_SLIDE: HeroSlide = {
+  backdropUrl:
+    "https://theithacan.org/wp-content/uploads/2024/03/Kung-Fu-Pnda-4.jpg",
+  logoUrl: "https://i.ibb.co/q36NtJNT/sad.png",
+  titleText: "Kung Fu Panda 4",
+  badge: "MOVIE",
+  metaParts: ["Movie", "Animation", "2024", "1h 34m"],
+  ratingBadge: "PG",
+};
+
+const Hero: React.FC<{ slide: HeroSlide; isKids: boolean }> = ({
+  slide,
   isKids,
 }) => {
-  if (isKids) {
-    const heroImage =
-      "https://theithacan.org/wp-content/uploads/2024/03/Kung-Fu-Pnda-4.jpg";
-    return (
-      <div className="relative w-full h-[90vh] min-h-[400px] text-white overflow-hidden rounded-xl">
-        <img
-          src={heroImage}
-          alt={"Kung Fu Panda 4"}
-          className="absolute inset-0 w-full h-full object-cover"
-        />
-        {/* Gradients for readability and cinematic effect */}
-        <div className="absolute inset-0 bg-gradient-to-t from-[var(--background)]/80 via-transparent to-transparent"></div>
-        <div className="absolute inset-0 bg-gradient-to-r from-black to-transparent"></div>
-        <div className="absolute inset-0 bg-gradient-to-l from-[var(--background)]/50 to-transparent"></div>
-
-        <div className="relative z-10 flex flex-col justify-end h-full px-4 md:px-10 pb-20">
-          <div className="max-w-xl animate-hero-content-in">
-            <div className="flex items-center gap-2 mb-3">
-              <span
-                className="text-xl font-black text-blue-500"
-                style={{ fontFamily: "'Anton', sans-serif" }}
-              >
-                N
-              </span>
-              <span className="text-sm font-semibold tracking-[0.2em] text-zinc-200 uppercase">
-                MOVIE
-              </span>
-            </div>
-            <img
-              src="https://i.ibb.co/q36NtJNT/sad.png"
-              alt="Kung Fu Panda 4 Title"
-              className="w-full max-w-sm md:max-w-md drop-shadow-lg mb-4"
-            />
-            <div
-              className="flex flex-wrap items-center gap-x-4 gap-y-1 text-base text-zinc-200"
-              style={{ textShadow: "1px 1px 2px rgba(0,0,0,0.7)" }}
-            >
-              <span>Movie</span>
-              <span>•</span>
-              <span>Animation</span>
-              <span>•</span>
-              <span>2024</span>
-              <span>•</span>
-              <span>1h 34m</span>
-              <span>•</span>
-              <span className="px-2 py-0.5 border border-zinc-400 text-sm rounded">
-                PG
-              </span>
-            </div>
-          </div>
-        </div>
-      </div>
-    );
-  }
-
-  // This component now always shows the Squid Game banner for visual consistency,
-  // regardless of the API call result. The `movie` prop is used for alt text if available.
-  const heroImage =
-    "https://images.squarespace-cdn.com/content/v1/56a1633ac21b86f80ddeacb4/106a6346-2ebd-4353-8bb4-b8a5e32320b2/squid+game+2+banner.jpg"; // Stable Squid Game banner URL
+  const accentClass = isKids ? "text-blue-500" : "text-red-600";
 
   return (
     <div className="relative w-full h-[90vh] min-h-[400px] text-white overflow-hidden rounded-xl">
+      <style>{`@keyframes heroBackdropFade { from { opacity: 0; } to { opacity: 1; } }`}</style>
       <img
-        src={heroImage}
-        alt={movie?.title || movie?.name || "Squid Game"}
+        key={slide.backdropUrl}
+        src={slide.backdropUrl}
+        alt={slide.titleText}
         className="absolute inset-0 w-full h-full object-cover"
+        style={{ animation: "heroBackdropFade 1s ease-in-out" }}
       />
       {/* Gradients for readability and cinematic effect */}
       <div className="absolute inset-0 bg-gradient-to-t from-[var(--background)]/80 via-transparent to-transparent"></div>
@@ -161,52 +139,61 @@ const Hero: React.FC<{ movie: Movie | null; isKids: boolean }> = ({
       <div className="absolute inset-0 bg-gradient-to-l from-[var(--background)]/50 to-transparent"></div>
 
       <div className="relative z-10 flex flex-col justify-end h-full px-4 md:px-10 pb-20">
-        <div className="max-w-xl animate-hero-content-in">
+        <div key={slide.titleText} className="max-w-xl animate-hero-content-in">
           <div className="flex items-center gap-2 mb-3">
             <span
-              className="text-xl font-black text-red-600"
+              className={`text-xl font-black ${accentClass}`}
               style={{ fontFamily: "'Anton', sans-serif" }}
             >
               N
             </span>
             <span className="text-sm font-semibold tracking-[0.2em] text-zinc-200 uppercase">
-              SERIES
+              {slide.badge}
             </span>
           </div>
-          <img
-            src="https://i.ibb.co/B5PW9wnh/pngimg-com-squid-game-PNG35-1.png"
-            alt="Squid Game Title"
-            className="w-full max-w-sm md:max-w-md drop-shadow-lg mb-4"
-          />
+          {slide.logoUrl ? (
+            <img
+              src={slide.logoUrl}
+              alt={`${slide.titleText} Title`}
+              className="w-full max-w-md md:max-w-lg max-h-52 object-contain object-left drop-shadow-lg mb-4"
+            />
+          ) : (
+            <h1
+              className="text-4xl md:text-6xl font-black drop-shadow-lg mb-4 uppercase"
+              style={{ fontFamily: "'Anton', sans-serif" }}
+            >
+              {slide.titleText}
+            </h1>
+          )}
           <div
             className="flex flex-wrap items-center gap-x-4 gap-y-1 text-base text-zinc-200"
             style={{ textShadow: "1px 1px 2px rgba(0,0,0,0.7)" }}
           >
-            <span>Show</span>
-            <span>•</span>
-            <span>Thriller</span>
-            <span>•</span>
-            <span>2025</span>
-            <span>•</span>
-            <span>3 seasons</span>
+            {slide.metaParts.map((part, i) => (
+              <React.Fragment key={`${part}-${i}`}>
+                {i > 0 && <span>•</span>}
+                <span>{part}</span>
+              </React.Fragment>
+            ))}
             <span>•</span>
             <span className="px-2 py-0.5 border border-zinc-400 text-sm rounded">
-              TV-MA
+              {slide.ratingBadge}
             </span>
           </div>
         </div>
       </div>
 
-      <div className="absolute bottom-10 right-10 z-10">
-        <div className="flex items-center gap-2 bg-black/50 px-3 py-2 rounded-md text-sm font-semibold backdrop-blur-sm">
-          <i className="far fa-calendar-alt"></i>
-          <span>Coming June 27</span>
+      {slide.comingSoonText && (
+        <div className="absolute bottom-10 right-10 z-10">
+          <div className="flex items-center gap-2 bg-black/50 px-3 py-2 rounded-md text-sm font-semibold backdrop-blur-sm">
+            <i className="far fa-calendar-alt"></i>
+            <span>{slide.comingSoonText}</span>
+          </div>
         </div>
-      </div>
+      )}
     </div>
   );
 };
-
 const PosterCard: React.FC<{
   movie: Movie;
   onCardClick: (movie: Movie) => void;
@@ -1162,6 +1149,8 @@ const SkeletonLoader: React.FC = () => (
 const HomePage: React.FC = () => {
   const [data, setData] = useState<any>({});
   const [loading, setLoading] = useState(true);
+  const [heroSlides, setHeroSlides] = useState<HeroSlide[]>([]);
+  const [heroIndex, setHeroIndex] = useState(0);
   const [focusedImage, setFocusedImage] = useState<string | null>(null);
   const { isKidsMode, activeProfile, setModalItem, getScreenSpecificData } =
     useProfile();
@@ -1177,6 +1166,111 @@ const HomePage: React.FC = () => {
       }
     };
   }, []);
+
+  // Build rotating hero slides (same style/layout as the default banner)
+  useEffect(() => {
+    const source = isKidsMode ? data.watchTogetherKids : data.trending;
+    if (!source || source.length === 0) return;
+    let cancelled = false;
+
+    const buildSlides = async () => {
+      const candidates = (source as Movie[])
+        .filter((m) => m.backdrop_path)
+        .slice(0, 6);
+
+      const built = await Promise.all(
+        candidates.map(async (item) => {
+          try {
+            const type = item.media_type || (item.title ? "movie" : "tv");
+            const [details, images] = await Promise.all([
+              fetchFromTMDB(`/${type}/${item.id}`),
+              fetchFromTMDB(`/${type}/${item.id}/images`, {
+                include_image_language: "en,null",
+              }),
+            ]);
+            const logos = (images?.logos || []) as any[];
+            const logoPath =
+              logos.find((l) => l.iso_639_1 === "en")?.file_path ||
+              logos[0]?.file_path ||
+              null;
+            const year = (
+              details.release_date ||
+              details.first_air_date ||
+              ""
+            ).slice(0, 4);
+            const genre = details.genres?.[0]?.name as string | undefined;
+            const runtime = details.runtime
+              ? `${Math.floor(details.runtime / 60)}h ${details.runtime % 60}m`
+              : null;
+            const seasons = details.number_of_seasons
+              ? `${details.number_of_seasons} season${details.number_of_seasons > 1 ? "s" : ""}`
+              : null;
+            const metaParts = (
+              type === "movie"
+                ? ["Movie", genre, year, runtime]
+                : ["Show", genre, year, seasons]
+            ).filter(Boolean) as string[];
+
+            return {
+              backdropUrl: `${IMAGE_BASE_URL}${BACKDROP_SIZE}${item.backdrop_path}`,
+              logoUrl: logoPath ? `${IMAGE_BASE_URL}w500${logoPath}` : null,
+              titleText: item.title || item.name || "",
+              badge: type === "movie" ? "MOVIE" : "SERIES",
+              metaParts,
+              ratingBadge: isKidsMode
+                ? "PG"
+                : type === "movie"
+                  ? "PG-13"
+                  : "TV-MA",
+            } as HeroSlide;
+          } catch {
+            return null;
+          }
+        }),
+      );
+
+      if (cancelled) return;
+      const valid = built.filter(Boolean) as HeroSlide[];
+      const defaultSlide = isKidsMode
+        ? KIDS_DEFAULT_SLIDE
+        : REGULAR_DEFAULT_SLIDE;
+      // Avoid duplicating the default hero if it also appears in the fetched list
+      const unique = valid.filter(
+        (s) =>
+          s.titleText.toLowerCase() !== defaultSlide.titleText.toLowerCase(),
+      );
+      setHeroSlides([defaultSlide, ...unique]);
+      setHeroIndex(0);
+    };
+
+    buildSlides();
+    return () => {
+      cancelled = true;
+    };
+  }, [data.trending, data.watchTogetherKids, isKidsMode]);
+
+  // Rotate the hero slide every 5 minutes
+  useEffect(() => {
+    if (heroSlides.length <= 1) return;
+    const interval = setInterval(() => {
+      setHeroIndex((i) => (i + 1) % heroSlides.length);
+    }, HERO_ROTATION_INTERVAL_MS);
+    return () => clearInterval(interval);
+  }, [heroSlides.length]);
+
+  // Preload the next slide's images for a seamless transition
+  useEffect(() => {
+    if (heroSlides.length <= 1) return;
+    const next = heroSlides[(heroIndex + 1) % heroSlides.length];
+    if (next) {
+      const img = new Image();
+      img.src = next.backdropUrl;
+      if (next.logoUrl) {
+        const logoImg = new Image();
+        logoImg.src = next.logoUrl;
+      }
+    }
+  }, [heroIndex, heroSlides]);
 
   const handleOpenModal = (item: Movie) => {
     setModalItem(item);
@@ -1542,7 +1636,7 @@ const HomePage: React.FC = () => {
       ) : (
         <div className="px-4 md:px-10 pt-24">
           <>
-            <Hero movie={data.hero} isKids={isKidsMode} />
+            <Hero slide={heroSlides[heroIndex] || (isKidsMode ? KIDS_DEFAULT_SLIDE : REGULAR_DEFAULT_SLIDE)} isKids={isKidsMode} />
             <div className="relative z-10 mt-12 space-y-20">
               <ContentRow
                 title={isKidsMode ? t("kidsFavorites") : t("yourNextWatch")}
