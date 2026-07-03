@@ -31,9 +31,12 @@ async function startServer() {
   // ==========================================================
   app.use(express.json());
 
-  const DATA_DIR = path.join(process.cwd(), "data");
-  const USERS_FILE = path.join(DATA_DIR, "users.json");
-  const SESSIONS_FILE = path.join(DATA_DIR, "sessions.json");
+  const REDIS_URL = process.env.UPSTASH_REDIS_REST_URL || process.env.KV_REST_API_URL || "";
+  const REDIS_TOKEN = process.env.UPSTASH_REDIS_REST_TOKEN || process.env.KV_REST_API_TOKEN || "";
+  const hasRedis = Boolean(REDIS_URL && REDIS_TOKEN);
+
+  const TMP_DIR = "/tmp/vetrix-auth";
+  const DATA_DIR = process.env.VERCEL ? TMP_DIR : path.join(process.cwd(), "data");
 
   interface StoredUser {
     id: string;
@@ -46,68 +49,114 @@ async function startServer() {
     lastLoginAt: string | null;
   }
 
-  const readJson = <T>(file: string, fallback: T): T => {
+  const redisGet = async (key: string): Promise<string | null> => {
+    const r = await fetch(`${REDIS_URL}/get/${encodeURIComponent(key)}`, {
+      headers: { Authorization: `Bearer ${REDIS_TOKEN}` },
+    });
+    const j: any = await r.json().catch(() => null);
+    return j && j.result != null ? String(j.result) : null;
+  };
+
+  const redisSet = async (key: string, value: string) => {
+    await fetch(`${REDIS_URL}/set/${encodeURIComponent(key)}`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${REDIS_TOKEN}` },
+      body: value,
+    });
+  };
+
+  const readJson = async <T>(key: string, fallback: T): Promise<T> => {
     try {
+      if (hasRedis) {
+        const raw = await redisGet(key);
+        return raw ? (JSON.parse(raw) as T) : fallback;
+      }
+      const file = path.join(DATA_DIR, `${key}.json`);
       if (fs.existsSync(file)) {
         return JSON.parse(fs.readFileSync(file, "utf-8")) as T;
       }
     } catch (e) {
-      console.error(`[Auth] Failed to read ${file}:`, e);
+      console.error(`[Auth] Failed to read ${key}:`, e);
     }
     return fallback;
   };
 
-  const writeJson = (file: string, data: any) => {
+  const writeJson = async (key: string, data: any) => {
     try {
+      const raw = JSON.stringify(data, null, 2);
+      if (hasRedis) {
+        await redisSet(key, raw);
+        return;
+      }
       if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
-      fs.writeFileSync(file, JSON.stringify(data, null, 2), "utf-8");
+      fs.writeFileSync(path.join(DATA_DIR, `${key}.json`), raw, "utf-8");
     } catch (e) {
-      console.error(`[Auth] Failed to write ${file}:`, e);
+      console.error(`[Auth] Failed to write ${key}:`, e);
     }
   };
 
-  let users: StoredUser[] = readJson<StoredUser[]>(USERS_FILE, []);
-  let sessions: Record<string, { userId: string; createdAt: number }> =
-    readJson(SESSIONS_FILE, {});
-  const qrCodes = new Map<
-    string,
-    { status: "pending" | "approved"; token?: string; createdAt: number }
-  >();
+  let users: StoredUser[] = [];
+  let sessions: Record<string, { userId: string; createdAt: number }> = {};
+  
+  // Async initialization
+  const initDb = async () => {
+    users = await readJson<StoredUser[]>("users", []);
+    if (!Array.isArray(users)) users = [];
+    
+    sessions = await readJson("sessions", {});
+    if (!sessions || typeof sessions !== "object" || Array.isArray(sessions)) sessions = {};
+    
+    qrCodes = await readJson("qr", {});
+    if (!qrCodes || typeof qrCodes !== "object" || Array.isArray(qrCodes)) qrCodes = {};
+    
+    // Seed the owner admin account
+    const ownerAccount = users.find((u) => u.username === "adminown1");
+    if (ownerAccount && ownerAccount.role !== "admin") {
+      ownerAccount.role = "admin";
+      await saveUsers();
+    }
+    if (!ownerAccount) {
+      const salt = crypto.randomBytes(16).toString("hex");
+      users.push({
+        id: `usr_${Date.now()}`,
+        username: "adminown1",
+        passwordHash: hashPassword("admin20261", salt),
+        salt,
+        role: "admin",
+        banned: false,
+        createdAt: new Date().toISOString(),
+        lastLoginAt: null,
+      });
+      await saveUsers();
+    }
+
+    // Clean up the old auto-seeded "admin" account if it was never used
+    const oldDefaultIdx = users.findIndex((u) => u.username === "admin" && u.lastLoginAt === null);
+    if (oldDefaultIdx !== -1) {
+      users.splice(oldDefaultIdx, 1);
+      await saveUsers();
+    }
+  };
+
+  const saveUsers = () => writeJson("users", users);
+  const saveSessions = () => writeJson("sessions", sessions);
+
+  let dbInitialized = false;
+  app.use(async (req, res, next) => {
+    if (!dbInitialized) {
+      await initDb();
+      dbInitialized = true;
+    }
+    next();
+  });
+
+  type QrEntry = { status: "pending" | "approved"; token?: string; createdAt: number };
+  let qrCodes: Record<string, QrEntry> = {};
+
   const QR_TTL_MS = 5 * 60 * 1000;
 
   const hashPassword = (password: string, salt: string) =>
     crypto.scryptSync(password, salt, 64).toString("hex");
-
-  const saveUsers = () => writeJson(USERS_FILE, users);
-  const saveSessions = () => writeJson(SESSIONS_FILE, sessions);
-
-  // Seed the owner admin account on first run (and always ensure it has the admin role)
-  const ownerAccount = users.find((u) => u.username === "adminown1");
-  if (ownerAccount && ownerAccount.role !== "admin") {
-    ownerAccount.role = "admin";
-    saveUsers();
-  }
-  if (!ownerAccount) {
-    const salt = crypto.randomBytes(16).toString("hex");
-    users.push({
-      id: `usr_${Date.now()}`,
-      username: "adminown1",
-      passwordHash: hashPassword("admin20261", salt),
-      salt,
-      role: "admin",
-      banned: false,
-      createdAt: new Date().toISOString(),
-      lastLoginAt: null,
-    });
-    saveUsers();
-  }
-
-  // Clean up the old auto-seeded "admin" account if it was never used
-  const oldDefaultIdx = users.findIndex((u) => u.username === "admin" && u.lastLoginAt === null);
-  if (oldDefaultIdx !== -1) {
-    users.splice(oldDefaultIdx, 1);
-    saveUsers();
-  }
 
   const publicUser = (u: StoredUser) => ({
     id: u.id,
@@ -138,11 +187,18 @@ async function startServer() {
     return token;
   };
 
+  const saveQr = () => writeJson("qr", qrCodes);
+
   const cleanQrCodes = () => {
     const now = Date.now();
-    for (const [code, entry] of qrCodes.entries()) {
-      if (now - entry.createdAt > QR_TTL_MS) qrCodes.delete(code);
+    let changed = false;
+    for (const code of Object.keys(qrCodes)) {
+      if (now - qrCodes[code].createdAt > QR_TTL_MS) {
+        delete qrCodes[code];
+        changed = true;
+      }
     }
+    if (changed) saveQr();
   };
 
   // --- Sign up ---
@@ -210,7 +266,8 @@ async function startServer() {
   app.post("/api/auth/qr/create", (req, res) => {
     cleanQrCodes();
     const code = crypto.randomBytes(3).toString("hex").toUpperCase();
-    qrCodes.set(code, { status: "pending", createdAt: Date.now() });
+    qrCodes[code] = { status: "pending", createdAt: Date.now() };
+    saveQr();
     res.json({ code, expiresInSeconds: QR_TTL_MS / 1000 });
   });
 
@@ -218,12 +275,13 @@ async function startServer() {
   app.get("/api/auth/qr/status", (req, res) => {
     cleanQrCodes();
     const code = String(req.query.code || "").toUpperCase();
-    const entry = qrCodes.get(code);
+    const entry = qrCodes[code];
     if (!entry) return res.json({ status: "expired" });
     if (entry.status === "approved" && entry.token) {
       const session = sessions[entry.token];
       const user = session ? users.find((u) => u.id === session.userId) : null;
-      qrCodes.delete(code);
+      delete qrCodes[code];
+      saveQr();
       return res.json({
         status: "approved",
         token: entry.token,
@@ -239,12 +297,13 @@ async function startServer() {
     const user = getUserByToken(req);
     if (!user) return res.status(401).json({ error: "Log in first to approve the TV" });
     const code = String((req.body || {}).code || "").toUpperCase();
-    const entry = qrCodes.get(code);
+    const entry = qrCodes[code];
     if (!entry || entry.status !== "pending") {
       return res.status(404).json({ error: "Code expired or invalid. Refresh the QR on your TV." });
     }
     entry.token = createSession(user);
     entry.status = "approved";
+    saveQr();
     res.json({ ok: true });
   });
 
@@ -471,8 +530,16 @@ async function startServer() {
       console.log(`Server running on port ${PORT}`);
     });
   }
+
+  // Global error handler
+  app.use((err: any, req: express.Request, res: express.Response, next: express.NextFunction) => {
+    console.error("[Express Error]", err);
+    res.status(500).json({ error: "Internal Server Error", details: err.message });
+  });
 }
 
-startServer();
+startServer().catch(err => {
+  console.error("Server start failed:", err);
+});
 
 export default app;
