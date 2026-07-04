@@ -129,6 +129,67 @@ export const fetchStreamUrl = async (
         try {
             console.log(`Trying provider: ${provider.name}`);
 
+            // VidSrc (vsembed) works directly with TMDB ids via our own backend extractor.
+            if (provider.id === 'vsembed') {
+                const vsParams = new URLSearchParams();
+                vsParams.append('type', media_type);
+                vsParams.append('tmdb_id', String(item.id));
+                if (media_type === 'tv') {
+                    if (season) vsParams.append('season', String(season));
+                    if (episode) vsParams.append('episode', String(episode));
+                }
+
+                const vsData: any = await fetchWithHeaders(`/api/vs-extract?${vsParams.toString()}`);
+                if (!vsData || vsData.success !== true) {
+                    throw new Error('VidSrc: no stream found');
+                }
+                const vsFirst: any = Object.values(vsData.results || {}).find((r: any) => r && r.hls_url);
+                if (!vsFirst) {
+                    throw new Error('VidSrc: no working stream found');
+                }
+
+                const vsResult: StreamData & { provider: string } = {
+                    links: [{ quality: 'Auto', url: vsFirst.hls_url }],
+                    provider: provider.name,
+                };
+
+                if (Array.isArray(vsFirst.subtitles) && vsFirst.subtitles.length > 0) {
+                    const vsLangMap: Record<string, string> = {
+                        'english': 'en', 'arabic': 'ar', 'french': 'fr', 'spanish': 'es',
+                        'german': 'de', 'italian': 'it', 'portuguese': 'pt', 'russian': 'ru',
+                        'turkish': 'tr', 'chinese': 'zh', 'japanese': 'ja', 'korean': 'ko', 'hindi': 'hi'
+                    };
+                    const vsSeen = new Set<string>();
+                    vsResult.subtitles = vsFirst.subtitles
+                        .filter((s: any) => s && s.url)
+                        .filter((s: any) => {
+                            const key = (s.lang || 'Sub') + s.url;
+                            if (vsSeen.has(key)) return false;
+                            vsSeen.add(key);
+                            return true;
+                        })
+                        .map((s: any) => {
+                            const label = s.lang || 'Sub';
+                            const code = vsLangMap[label.toLowerCase()] || label;
+                            return {
+                                display: label,
+                                language: code,
+                                url: `/api/vs-sub?url=${encodeURIComponent(s.url)}`
+                            };
+                        });
+                }
+
+                try {
+                    const expiry = Date.now() + 30 * 60 * 1000; // 30 minute expiry
+                    localStorage.setItem(cacheKey, JSON.stringify({ data: vsResult, expiry }));
+                } catch (e) {
+                    console.error("Error writing to stream cache:", e);
+                }
+
+                console.log(`Success with provider: ${provider.name}`);
+                return vsResult;
+            }
+
             const params = new URLSearchParams();
             
             if (provider.id === 'td') {

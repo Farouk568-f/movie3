@@ -9,6 +9,7 @@ export const BACKDROP_SIZE_MEDIUM = "w780";
 // IMPORTANT: This is the new backend URL for fetching stream links.
 export const SCRAPER_API_URL = "https://p01--movie--lk5qxsd2bfgp.code.run/scrape";
 export const AVAILABLE_PROVIDERS = [
+    { id: 'vsembed', name: 'VidSrc' },
     { id: 'moviebox', name: 'MovieBox' },
     { id: 'veloratv', name: 'VeloraTV' },
     { id: 'akwam', name: 'Akwam' },

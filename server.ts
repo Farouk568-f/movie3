@@ -5,6 +5,7 @@ import crypto from "crypto";
 import http from "http";
 import https from "https";
 import { URL } from "url";
+import { Readable } from "stream";
 import { Redis } from "@upstash/redis";
 
 const app = express();
@@ -613,6 +614,313 @@ app.use((req, res, next) => {
         activeRemoteRequest.destroy();
       }
     });
+  });
+
+  // ==========================================================
+  // VS PROVIDER (TMDB-based): m3u8 extractor + HLS proxy
+  // Works directly with TMDB ids: /api/vs-extract?type=movie&tmdb_id=..
+  // ==========================================================
+  const VS_PROVIDERS = [
+    "https://vsembed.ru",
+    "https://vsembed.su",
+    "https://vidsrcme.ru",
+  ];
+
+  // Simple in-memory cache to avoid scraping same query repeatedly (15 minutes)
+  const vsCache = new Map<string, any>();
+
+  async function vsScrapeProvider(domain: string, targetUrl: string) {
+    console.log(`\n[VS ${domain}] Starting scrape for URL: ${targetUrl}`);
+    try {
+      // 1. Fetch the embed page
+      const embedRes = await fetch(targetUrl, { redirect: "follow" });
+      if (!embedRes.ok) throw new Error(`Embed fetch failed: ${embedRes.status}`);
+      const embedHtml = await embedRes.text();
+
+      // 2. Extract rcp URL from iframe
+      const rcpMatch = embedHtml.match(/src="\/\/(cloudorchestranova\.com\/rcp\/[^"]+)"/);
+      if (!rcpMatch) throw new Error("RCP iframe not found in embed page");
+      const rcpUrl = `https://${rcpMatch[1]}`;
+
+      // 3. Fetch the RCP page
+      const rcpRes = await fetch(rcpUrl, {
+        headers: { Referer: targetUrl },
+        redirect: "follow",
+      });
+      if (!rcpRes.ok) throw new Error(`RCP fetch failed: ${rcpRes.status}`);
+      const rcpHtml = await rcpRes.text();
+
+      // 4. Extract prorcp URL
+      const prorcpMatch = rcpHtml.match(/src:\s*'(\/prorcp\/[^']+)'/);
+      if (!prorcpMatch) throw new Error("ProRCP URL not found in RCP page");
+      const prorcpUrl = `https://cloudorchestranova.com${prorcpMatch[1]}`;
+
+      // 5. Fetch the ProRCP page
+      const prorcpRes = await fetch(prorcpUrl, {
+        headers: { Referer: rcpUrl },
+        redirect: "follow",
+      });
+      if (!prorcpRes.ok) throw new Error(`ProRCP fetch failed: ${prorcpRes.status}`);
+      const prorcpHtml = await prorcpRes.text();
+
+      // 6. Extract master_urls and token generation host
+      let masterUrls = "";
+      const masterUrlsMatch = prorcpHtml.match(/var\s+master_urls\s*=\s*['"]([^'"]+)['"]/i);
+      const fileMatch = prorcpHtml.match(/file:\s*['"](.*?)['"]/i);
+
+      if (masterUrlsMatch) {
+        masterUrls = masterUrlsMatch[1];
+      } else if (fileMatch) {
+        masterUrls = fileMatch[1];
+      } else {
+        const fallbackMatch = prorcpHtml.match(/(https:\/\/[^\s"'<>]+\.m3u8[^\s"'<>]*)/i);
+        if (fallbackMatch) {
+          masterUrls = fallbackMatch[1];
+        } else {
+          throw new Error("No stream URL found in ProRCP source");
+        }
+      }
+
+      let hlsUrl = masterUrls.split(" or ")[0];
+
+      // 7. Get token if needed
+      if (hlsUrl.includes("__TOKEN__")) {
+        const m3u8UrlObj = new URL(hlsUrl);
+        const tokenHost = m3u8UrlObj.host;
+        try {
+          const tokenRes = await fetch(`https://${tokenHost}/generate.php`, {
+            headers: { Referer: prorcpUrl },
+          });
+          if (tokenRes.ok) {
+            const token = await tokenRes.text();
+            hlsUrl = hlsUrl.replace(/__TOKEN__/g, token.trim());
+          }
+        } catch (e) {
+          console.warn(`[VS ${domain}] Failed to generate token:`, e);
+        }
+      }
+
+      // Proxy the hlsUrl to avoid IP lock issues on the client
+      const proxiedHlsUrl = `/api/vs-proxy/playlist.m3u8?url=${encodeURIComponent(hlsUrl)}`;
+
+      // 8. Extract subtitles
+      const subtitles: { lang: string; url: string }[] = [];
+      const subsMatch = prorcpHtml.match(/var\s+default_subtitles\s*=\s*['"]([^'"]+)['"]/i);
+      if (subsMatch && subsMatch[1] && subsMatch[1] !== "[]") {
+        const subsArray = subsMatch[1].split(",");
+        for (const sub of subsArray) {
+          const parts = sub.split("]");
+          if (parts.length === 2) {
+            subtitles.push({ lang: parts[0].replace("[", "").trim(), url: parts[1] });
+          } else {
+            subtitles.push({ lang: "Sub", url: sub });
+          }
+        }
+      }
+
+      return { hls_url: proxiedHlsUrl, subtitles, error: null };
+    } catch (error: any) {
+      console.error(`[VS ${domain}] Error: ${error.message}`);
+      return { hls_url: null, subtitles: [], error: error.message };
+    }
+  }
+
+  // Extract endpoint for m3u8 scraper (TMDB id based)
+  app.get("/api/vs-extract", async (req, res) => {
+    const type = (req.query.type as string) || "movie";
+    const tmdb_id = req.query.tmdb_id as string;
+    const season = req.query.season ? parseInt(req.query.season as string) : undefined;
+    const episode = req.query.episode ? parseInt(req.query.episode as string) : undefined;
+
+    if (!tmdb_id) {
+      return res.status(400).json({
+        success: false,
+        error: "tmdb_id query param is required",
+        results: {},
+      });
+    }
+
+    if (type === "tv" && (season == null || episode == null)) {
+      return res.status(400).json({
+        success: false,
+        error: "season and episode query params are required for TV shows",
+        results: {},
+      });
+    }
+
+    const cacheKey = JSON.stringify(req.query);
+    const cached = vsCache.get(cacheKey);
+    if (cached && Date.now() - cached.timestamp < 1000 * 60 * 15) {
+      console.log("[VS] Serving from cache");
+      return res.json(cached.response);
+    }
+
+    const urls = VS_PROVIDERS.reduce((acc: Record<string, string>, domain) => {
+      acc[domain] =
+        type === "tv"
+          ? `${domain}/embed/tv?tmdb=${tmdb_id}&season=${season}&episode=${episode}`
+          : `${domain}/embed/movie/${tmdb_id}`;
+      return acc;
+    }, {});
+
+    try {
+      const resultsArr = await Promise.all(
+        Object.entries(urls).map(async ([domain, url]) => {
+          try {
+            const result = await vsScrapeProvider(domain, url);
+            return [domain, result];
+          } catch (err: any) {
+            console.error(`[VS ${domain}] Final error: ${err.message}`);
+            return [
+              domain,
+              { hls_url: null, subtitles: [], error: err.message },
+            ];
+          }
+        })
+      );
+
+      const results = Object.fromEntries(resultsArr);
+      const success = Object.values(results).some((r: any) => r.hls_url);
+
+      const response = { success, results };
+
+      vsCache.set(cacheKey, {
+        timestamp: Date.now(),
+        response,
+      });
+
+      res.json(response);
+    } catch (err) {
+      res.status(500).json({
+        success: false,
+        error: "Unexpected server error",
+        results: {},
+      });
+    }
+  });
+
+  // HLS playlist proxy (rewrites nested playlists and segments through our proxy)
+  app.get("/api/vs-proxy/playlist.m3u8", async (req, res) => {
+    const targetUrl = req.query.url as string;
+    if (!targetUrl) return res.status(400).send("Missing url");
+
+    try {
+      const fetchRes = await fetch(targetUrl, {
+        headers: {
+          "User-Agent": (req.headers["user-agent"] as string) || "Mozilla/5.0",
+          "Referer": "https://cloudorchestranova.com/",
+        },
+      });
+
+      if (!fetchRes.ok) {
+        return res.status(fetchRes.status).send("Failed to fetch m3u8");
+      }
+
+      const m3u8Content = await fetchRes.text();
+
+      const targetUrlObj = new URL(targetUrl);
+      const hostUrl = `${targetUrlObj.protocol}//${targetUrlObj.host}`;
+      const baseUrl = targetUrl.substring(0, targetUrl.lastIndexOf("/") + 1);
+
+      const rewritten = m3u8Content
+        .split("\n")
+        .map((line) => {
+          const tline = line.trim();
+          if (!tline || tline.startsWith("#")) return line;
+
+          let fullUrl = tline;
+          if (tline.startsWith("http")) {
+            fullUrl = tline;
+          } else if (tline.startsWith("/")) {
+            fullUrl = hostUrl + tline;
+          } else {
+            fullUrl = baseUrl + tline;
+          }
+
+          // Check if the URL is another m3u8 or a ts chunk
+          if (fullUrl.includes(".m3u8")) {
+            return `/api/vs-proxy/playlist.m3u8?url=${encodeURIComponent(fullUrl)}`;
+          } else {
+            return `/api/vs-proxy/ts?url=${encodeURIComponent(fullUrl)}`;
+          }
+        })
+        .join("\n");
+
+      res.set("Content-Type", "application/vnd.apple.mpegurl");
+      res.send(rewritten);
+    } catch (err: any) {
+      res.status(500).send("Proxy error: " + err.message);
+    }
+  });
+
+  // HLS segment proxy
+  app.get("/api/vs-proxy/ts", async (req, res) => {
+    const targetUrl = req.query.url as string;
+    if (!targetUrl) return res.status(400).send("Missing url");
+
+    try {
+      const fetchRes = await fetch(targetUrl, {
+        headers: {
+          "User-Agent": (req.headers["user-agent"] as string) || "Mozilla/5.0",
+          "Referer": "https://cloudorchestranova.com/",
+        },
+      });
+
+      if (!fetchRes.ok) {
+        return res.status(fetchRes.status).send("Failed to fetch ts");
+      }
+
+      // Always force MPEG-TS video content type to avoid MIME-type decode issues in browsers
+      res.set("Content-Type", "video/mp2t");
+      res.set("Access-Control-Allow-Origin", "*");
+
+      // stream the response
+      if (fetchRes.body) {
+        // @ts-ignore
+        Readable.fromWeb(fetchRes.body).pipe(res);
+      } else {
+        res.send(Buffer.from(await fetchRes.arrayBuffer()));
+      }
+    } catch (err: any) {
+      if (!res.headersSent) {
+        res.status(500).send("Proxy error: " + err.message);
+      }
+    }
+  });
+
+  // Subtitle proxy: converts SRT to VTT and fixes CORS
+  app.get("/api/vs-sub", async (req, res) => {
+    const fileUrl = req.query.url as string;
+    if (!fileUrl) return res.status(400).send("Missing subtitle URL");
+
+    try {
+      const subtitleRes = await fetch(fileUrl);
+      const raw = await subtitleRes.text();
+
+      if (raw.trim().startsWith("WEBVTT")) {
+        res.setHeader("Content-Type", "text/vtt");
+        res.setHeader("Access-Control-Allow-Origin", "*");
+        return res.send(raw);
+      }
+
+      const vtt =
+        "WEBVTT\n\n" +
+        raw
+          .replace(/\r+/g, "")
+          .replace(/^\s+|\s+$/g, "")
+          .split("\n")
+          .map((line) =>
+            line.replace(/(\d{2}):(\d{2}):(\d{2})[,.](\d{3})/g, "$1:$2:$3.$4")
+          )
+          .join("\n");
+
+      res.setHeader("Content-Type", "text/vtt");
+      res.setHeader("Access-Control-Allow-Origin", "*");
+      res.send(vtt);
+    } catch (err: any) {
+      console.error("[VS] Subtitle Proxy Error:", err.message);
+      res.status(500).send("Failed to convert subtitle");
+    }
   });
 
   // Vite middleware for development vs static serve for production
