@@ -1,7 +1,7 @@
 
 
 import { GoogleGenAI, Type } from "@google/genai";
-import { TMDB_API_KEY, TMDB_BASE_URL, SCRAPER_API_URL, BACKUP_SCRAPER_API_URL, AVAILABLE_PROVIDERS } from '../contexts/constants';
+import { TMDB_API_KEY, TMDB_BASE_URL, SCRAPER_API_URL, AVAILABLE_PROVIDERS } from '../contexts/constants';
 import { Movie, SubtitleTrack, StreamLink, StreamData } from '../types';
 
 const fetchWithTimeout = async (resource: RequestInfo, options: RequestInit & { timeout?: number } = {}) => {
@@ -181,22 +181,11 @@ export const fetchStreamUrl = async (
             
             const targetUrl = `${SCRAPER_API_URL}?${params.toString()}`;
             
-            let responseData;
-            try {
-                responseData = await fetchWithHeaders(targetUrl, {
-                    headers: {
-                        'ngrok-skip-browser-warning': 'true'
-                    }
-                });
-            } catch (err) {
-                console.warn(`Main scraper URL failed (${targetUrl}), trying backup...`, err);
-                const backupUrl = `${BACKUP_SCRAPER_API_URL}?${params.toString()}`;
-                responseData = await fetchWithHeaders(backupUrl, {
-                    headers: {
-                        'ngrok-skip-browser-warning': 'true'
-                    }
-                });
-            }
+            const responseData = await fetchWithHeaders(targetUrl, {
+                headers: {
+                    'ngrok-skip-browser-warning': 'true'
+                }
+            });
 
             if (typeof responseData !== 'object' || responseData === null) {
                 throw new Error('Invalid response from scraper API');
@@ -511,7 +500,7 @@ const skipTimesSchema = {
     }
 };
 
-import { SCRAPER_API_URL, BACKUP_SCRAPER_API_URL } from '../contexts/constants';
+import { SCRAPER_API_URL } from '../contexts/constants';
 
 export const analyzeSubtitlesForSkips = async (srtContent: string): Promise<{ intro: { start: number, end: number } | null; outro: { start: number, end: number } | null; }> => {
     if (!process.env.API_KEY) {
@@ -582,31 +571,21 @@ export const streamDubbing = async (
     onError: (error: Error) => void,
     onClose: () => void
 ) => {
-    let baseUrl = new URL(SCRAPER_API_URL).origin;
-    let DUBBING_API_URL = `${baseUrl}/dub`;
+    const baseUrl = new URL(SCRAPER_API_URL).origin;
+    const DUBBING_API_URL = `${baseUrl}/dub`;
     const encodedUrl = encodeURIComponent(srtUrl);
-    let fullUrl = `${DUBBING_API_URL}?url=${encodedUrl}`;
+    const fullUrl = `${DUBBING_API_URL}?url=${encodedUrl}`;
 
     console.log(`Starting dubbing stream from: ${fullUrl}`);
 
     try {
-        let response = await fetch(fullUrl, {
+        const response = await fetch(fullUrl, {
             headers: { 'ngrok-skip-browser-warning': 'true' }
         });
 
         if (!response.ok || !response.body) {
-            console.warn(`Dubbing service on main URL failed with status ${response.status}. Trying backup...`);
-            baseUrl = new URL(BACKUP_SCRAPER_API_URL).origin;
-            DUBBING_API_URL = `${baseUrl}/dub`;
-            fullUrl = `${DUBBING_API_URL}?url=${encodedUrl}`;
-            console.log(`Starting backup dubbing stream from: ${fullUrl}`);
-            response = await fetch(fullUrl, {
-                headers: { 'ngrok-skip-browser-warning': 'true' }
-            });
-            if (!response.ok || !response.body) {
-                const errorText = await response.text();
-                throw new Error(`Dubbing service failed on both URLs. Backup status ${response.status}: ${errorText}`);
-            }
+            const errorText = await response.text();
+            throw new Error(`Dubbing service failed with status ${response.status}: ${errorText}`);
         }
 
         const reader = response.body.getReader();
