@@ -84,23 +84,34 @@ export const fetchStreamUrl = async (
         console.error("Error reading from stream cache:", e);
     }
     
-    // Pre-fetch titles in required languages to avoid multiple API calls inside the loop.
-    let englishTitle = '';
-    let arabicTitle = '';
-    try {
-        const [detailsInEnglish, detailsInArabic] = await Promise.all([
-            fetchFromTMDB(`/${media_type}/${item.id}`, { language: 'en-US' }),
-            fetchFromTMDB(`/${media_type}/${item.id}`, { language: 'ar-SA' })
-        ]);
-        englishTitle = detailsInEnglish.title || detailsInEnglish.name || item.original_title || item.title || '';
-        arabicTitle = detailsInArabic.title || detailsInArabic.name || '';
-    } catch (err) {
-        console.error("Failed to pre-fetch titles, will fall back to item's default title.", err);
-        // Use titles from the initially passed item as a fallback
-        englishTitle = item.title || item.name || item.original_title || '';
-        // We can't get arabic title if the call fails, so arabic-toons will likely fail.
-        arabicTitle = '';
-    }
+    // Titles are only needed by TITLE-based providers (akwam, aflam, moviebox...).
+    // Fetch them lazily (and only once) so TMDB-id providers like VidSrc start
+    // playback immediately without waiting for two extra TMDB round-trips.
+    let titlesPromise: Promise<{ englishTitle: string; arabicTitle: string }> | null = null;
+    const getTitles = () => {
+        if (!titlesPromise) {
+            titlesPromise = (async () => {
+                try {
+                    const [detailsInEnglish, detailsInArabic] = await Promise.all([
+                        fetchFromTMDB(`/${media_type}/${item.id}`, { language: 'en-US' }),
+                        fetchFromTMDB(`/${media_type}/${item.id}`, { language: 'ar-SA' })
+                    ]);
+                    return {
+                        englishTitle: detailsInEnglish.title || detailsInEnglish.name || item.original_title || item.title || '',
+                        arabicTitle: detailsInArabic.title || detailsInArabic.name || ''
+                    };
+                } catch (err) {
+                    console.error("Failed to fetch titles, will fall back to item's default title.", err);
+                    // We can't get arabic title if the call fails, so arabic-toons will likely fail.
+                    return {
+                        englishTitle: item.title || item.name || item.original_title || '',
+                        arabicTitle: ''
+                    };
+                }
+            })();
+        }
+        return titlesPromise;
+    };
 
     const allProviders = AVAILABLE_PROVIDERS;
 
@@ -209,7 +220,8 @@ export const fetchStreamUrl = async (
                 params.append('tmdb_id', String(item.id));
             } else { // akwam, ristoanime, aflam, arabic-toons, and moviebox use title for searching
                  let titleToScrape = '';
-                 
+                 const { englishTitle, arabicTitle } = await getTitles();
+
                  if (provider.id === 'arabic-toons') {
                     if (!arabicTitle) {
                         console.warn("Arabic title not available for 'arabic-toons', skipping provider.");

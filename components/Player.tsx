@@ -13,7 +13,9 @@ const HLS_TUNING: Partial<Hls.HlsConfig> = {
     maxBufferSize: 90 * 1000 * 1000,
     backBufferLength: 30,
     startFragPrefetch: true,
+    startLevel: -1, // let ABR pick the first level from the bandwidth estimate
     abrEwmaDefaultEstimate: 1_600_000,
+    abrEwmaFastVoD: 2, // adapt quickly to the real bandwidth after start
     fragLoadingMaxRetry: 4,
     fragLoadingRetryDelay: 500,
     fragLoadingMaxRetryTimeout: 8000,
@@ -976,25 +978,34 @@ const VideoPlayer: React.FC<PlayerProps> = ({ item, itemType, initialSeason, ini
                 }
             });
 
-            hls.loadSource(activeStreamUrl);
-            hls.attachMedia(video);
-            hls.on(Hls.default.Events.MANIFEST_PARSED, () => {
-                video.currentTime = savedTime;
-                video.play().catch(() => {});
-                // Expose HLS renditions in the quality modal (Auto + heights),
-                // exactly like multi-link providers, when the source is a
-                // single master playlist with multiple levels.
+            // Expose HLS renditions in the quality modal (Auto + heights),
+            // exactly like multi-link providers, when the source is a
+            // single master playlist with multiple levels. Published once,
+            // re-checked on LEVEL_LOADED in case levels arrive late.
+            let levelsPublished = false;
+            const publishHlsLevels = () => {
+                if (levelsPublished) return;
                 try {
                     const levels = hls.levels || [];
                     if (levels.length > 1) {
                         const heights = [...new Set(levels.map(l => l.height).filter(Boolean))].sort((a, b) => b - a);
                         if (heights.length > 1) {
+                            levelsPublished = true;
                             setHlsQualities(heights.map(h => `${h}p`));
                             hls.currentLevel = -1; // Auto by default
                         }
                     }
                 } catch {}
+            };
+
+            hls.loadSource(activeStreamUrl);
+            hls.attachMedia(video);
+            hls.on(Hls.default.Events.MANIFEST_PARSED, () => {
+                video.currentTime = savedTime;
+                video.play().catch(() => {});
+                publishHlsLevels();
             });
+            hls.on(Hls.default.Events.LEVEL_LOADED, publishHlsLevels);
         } else if (activeStreamUrl.includes('/api/live-proxy') && !activeStreamUrl.match(/\.(mp4|mkv|webm)$/i) && mpegts.isSupported()) {
             const player = mpegts.createPlayer({
                 type: 'mpegts',

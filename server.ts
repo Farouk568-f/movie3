@@ -673,6 +673,85 @@ app.use((req, res, next) => {
       signal: AbortSignal.timeout(timeoutMs),
     });
 
+  // ----------------------------------------------------------
+  // IP-bound token handling.
+  // Stream tokens are JWTs locked to the caller's IP (/24). On serverless,
+  // every instance has a different egress IP, so a token extracted by one
+  // instance 403s on another — which used to trigger a FULL re-scrape per
+  // segment (the "heavy playback" bug). Instead, each instance fetches its
+  // OWN token once via generate.php (~200ms, cached) and swaps it into every
+  // upstream URL. Segments then stream directly with zero healing.
+  // ----------------------------------------------------------
+  const VS_TOKEN_TTL_MS = 1000 * 60 * 60; // tokens live ~4h; refresh hourly
+  const VS_TOKEN_NEG_TTL_MS = 1000 * 60 * 10; // don't re-probe token-less hosts for 10 min
+  const vsTokenCache = new Map<string, { token: string | null; ts: number }>();
+  const vsTokenInflight = new Map<string, Promise<string | null>>();
+
+  async function vsGetOwnToken(host: string, force = false): Promise<string | null> {
+    const cached = vsTokenCache.get(host);
+    if (!force && cached) {
+      const ttl = cached.token ? VS_TOKEN_TTL_MS : VS_TOKEN_NEG_TTL_MS;
+      if (Date.now() - cached.ts < ttl) return cached.token;
+    }
+
+    // Coalesce concurrent refreshes (a burst of segment requests on a cold
+    // instance must trigger only ONE generate.php call).
+    const inflightKey = `${host}:${force ? "f" : "n"}`;
+    const existing = vsTokenInflight.get(inflightKey);
+    if (existing) return existing;
+
+    const p = (async () => {
+      try {
+        const res = await vsFetch(`https://${host}/generate.php`, {
+          headers: { Referer: "https://cloudorchestranova.com/" },
+        }, 5000);
+        const token = res.ok ? (await res.text()).trim() : "";
+        if (!token || token.includes("<") || token.length < 20) {
+          // Host doesn't hand out tokens: remember that (negative cache),
+          // but never overwrite a previously good token with a failure.
+          if (!cached?.token) vsTokenCache.set(host, { token: null, ts: Date.now() });
+          return cached?.token ?? null;
+        }
+        vsTokenCache.set(host, { token, ts: Date.now() });
+        return token;
+      } catch {
+        return cached?.token ?? null;
+      } finally {
+        vsTokenInflight.delete(inflightKey);
+      }
+    })();
+    vsTokenInflight.set(inflightKey, p);
+    return p;
+  }
+
+  // Attach/replace the token query param with one bound to THIS instance's
+  // IP. Proxied URLs arrive token-less (stripped for stable caching), so the
+  // token must be ADDED here, not just swapped.
+  async function vsOwnTokenUrl(rawUrl: string, forceRefresh = false): Promise<string> {
+    try {
+      const u = new URL(rawUrl);
+      const token = await vsGetOwnToken(u.host, forceRefresh);
+      if (token) u.searchParams.set("token", token);
+      return u.href;
+    } catch {
+      return rawUrl;
+    }
+  }
+
+  // Drop the token from URLs we hand to the client: proxied URLs become
+  // stable across viewers/extractions (better edge-cache hit rate) and the
+  // proxy attaches its own token upstream anyway.
+  const vsStripToken = (rawUrl: string): string => {
+    try {
+      const u = new URL(rawUrl);
+      if (!u.searchParams.has("token")) return rawUrl;
+      u.searchParams.delete("token");
+      return u.href;
+    } catch {
+      return rawUrl;
+    }
+  };
+
   async function vsScrapeProvider(domain: string, targetUrl: string) {
     // 1. Fetch the embed page
     const embedRes = await vsFetch(targetUrl);
@@ -856,7 +935,7 @@ app.use((req, res, next) => {
 
     try {
       const r = await vsExtract(type, tmdb_id, season, episode);
-      const proxiedHlsUrl = `/api/vs-proxy/playlist.m3u8?url=${encodeURIComponent(r.hlsUrl)}&x=${r.ctx}`;
+      const proxiedHlsUrl = `/api/vs-proxy/playlist.m3u8?url=${encodeURIComponent(vsStripToken(r.hlsUrl))}&x=${r.ctx}`;
       // Keep the response shape the frontend already understands.
       // Edge caches the extraction for an hour: repeat viewers of the same title
       // get an instant answer without invoking the function at all.
@@ -879,8 +958,18 @@ app.use((req, res, next) => {
   // re-extract a fresh link (fresh token from THIS instance's IP) and retry.
   async function vsFetchPlaylistWithHeal(req: express.Request, targetUrl: string, xCtx?: string): Promise<{ text: string; finalUrl: string }> {
     try {
-      const r = await vsFetch(targetUrl, { headers: VS_UPSTREAM_HEADERS(req) }, 8000);
-      if (r.ok) return { text: await r.text(), finalUrl: targetUrl };
+      // Always fetch with a token bound to THIS instance's IP.
+      const ownUrl = await vsOwnTokenUrl(targetUrl);
+      const r = await vsFetch(ownUrl, { headers: VS_UPSTREAM_HEADERS(req) }, 8000);
+      if (r.ok) return { text: await r.text(), finalUrl: ownUrl };
+      // Token may have expired mid-flight: force-refresh once and retry.
+      if (r.status === 403 || r.status === 401) {
+        const freshUrl = await vsOwnTokenUrl(targetUrl, true);
+        if (freshUrl !== ownUrl) {
+          const r2 = await vsFetch(freshUrl, { headers: VS_UPSTREAM_HEADERS(req) }, 8000);
+          if (r2.ok) return { text: await r2.text(), finalUrl: freshUrl };
+        }
+      }
       throw new Error(`Upstream ${r.status}`);
     } catch (firstErr: any) {
       const ctx = xCtx ? vsUnpackCtx(xCtx) : null;
@@ -896,10 +985,14 @@ app.use((req, res, next) => {
       const masterText = await masterRes.text();
 
       // If the fresh playlist is a media playlist (no renditions), or the
-      // failing URL WAS the master (same path), we are done.
+      // failing URL WAS the master, we are done. Compare basenames (NOT full
+      // paths): the encoded path blob changes between extractions, and using
+      // full paths made a master request return a VARIANT playlist — which
+      // silently removed the quality menu in the player.
       const pathOf = (u: string) => { try { return new URL(u).pathname; } catch { return u; } };
+      const baseNameOf = (u: string) => pathOf(u).split("/").pop() || "";
       const isMasterPlaylist = masterText.includes("#EXT-X-STREAM-INF");
-      if (!isMasterPlaylist || pathOf(targetUrl) === pathOf(fresh.hlsUrl)) {
+      if (!isMasterPlaylist || baseNameOf(targetUrl) === baseNameOf(fresh.hlsUrl)) {
         return { text: masterText, finalUrl: fresh.hlsUrl };
       }
 
@@ -960,11 +1053,17 @@ app.use((req, res, next) => {
             fullUrl = baseUrl + tline;
           }
 
+          // Strip the (instance-specific) token so proxied URLs are identical
+          // for every viewer — the proxy re-attaches its own token upstream.
+          // Identical URLs mean the CDN/edge cache can serve segments without
+          // ever invoking the function again.
+          const cleanUrl = vsStripToken(fullUrl);
+
           // Check if the URL is another m3u8 or a ts chunk
           if (fullUrl.includes(".m3u8")) {
-            return `/api/vs-proxy/playlist.m3u8?url=${encodeURIComponent(fullUrl)}${xParam}`;
+            return `/api/vs-proxy/playlist.m3u8?url=${encodeURIComponent(cleanUrl)}${xParam}`;
           } else {
-            return `/api/vs-proxy/ts?url=${encodeURIComponent(fullUrl)}${xParam}`;
+            return `/api/vs-proxy/ts?url=${encodeURIComponent(cleanUrl)}${xParam}`;
           }
         })
         .join("\n");
@@ -1039,15 +1138,22 @@ app.use((req, res, next) => {
     const attempt = (u: string) => vsFetch(u, { headers: VS_UPSTREAM_HEADERS(req) }, 15000);
 
     try {
-      let fetchRes = await attempt(targetUrl).catch(() => null as any);
+      // Fast path: fetch with a token bound to THIS instance's IP.
+      let ownUrl = await vsOwnTokenUrl(targetUrl);
+      let fetchRes = await attempt(ownUrl).catch(() => null as any);
+      if (fetchRes && (fetchRes.status === 403 || fetchRes.status === 401)) {
+        // Our cached token expired: force-refresh once and retry.
+        ownUrl = await vsOwnTokenUrl(targetUrl, true);
+        fetchRes = await attempt(ownUrl).catch(() => fetchRes);
+      }
       if ((!fetchRes || !fetchRes.ok) && xCtx) {
-        // Token expired / IP-locked: self-heal via fresh extraction
+        // Link itself is dead: self-heal via fresh extraction (rare now)
         const healed = await vsHealSegment(req, targetUrl, xCtx);
-        if (healed) fetchRes = await attempt(healed).catch(() => fetchRes);
+        if (healed) fetchRes = await attempt(await vsOwnTokenUrl(healed)).catch(() => fetchRes);
       }
       if (!fetchRes || !fetchRes.ok) {
         // one last quick retry — segment hosts occasionally hiccup
-        fetchRes = await attempt(targetUrl);
+        fetchRes = await attempt(ownUrl);
       }
       if (!fetchRes.ok) {
         return res.status(fetchRes.status).send("Failed to fetch ts");
