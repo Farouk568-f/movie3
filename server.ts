@@ -631,6 +631,16 @@ app.use((req, res, next) => {
     "https://vidsrc.in",
   ];
 
+  // Optional external stream proxy (a Cloudflare Worker running
+  // cloudflare-worker/vs-stream-proxy.js). When set, heavy video segments are
+  // served through the worker instead of this server: video bandwidth here
+  // drops to ~0 and playback streams from Cloudflare's global edge cache.
+  // NOTE: the upstream CDN 403s ANY browser Origin header, so segments can
+  // never be fetched directly by the client — they must go through a
+  // server-side hop. A worker is the cheapest, fastest such hop.
+  // Set VS_STREAM_PROXY to the worker URL, e.g. https://vs-stream.yourname.workers.dev
+  const VS_STREAM_PROXY = (process.env.VS_STREAM_PROXY || "").trim().replace(/\/+$/, "");
+
   // Long TTL keeps segment URLs stable so Vercel's edge cache is reused across
   // viewers and page reloads. Expired/IP-locked tokens are handled by the
   // self-heal path, so a stale cache entry is never fatal.
@@ -1038,6 +1048,12 @@ app.use((req, res, next) => {
       const baseUrl = finalUrl.substring(0, finalUrl.lastIndexOf("/") + 1);
       const xParam = xCtx ? `&x=${xCtx}` : "";
 
+      // When segments are offloaded to the edge worker, tell it where to fall
+      // back (this deployment) if the upstream ever rejects the worker.
+      const selfProto = ((req.headers["x-forwarded-proto"] as string) || "https").split(",")[0].trim();
+      const selfHost = (req.headers["x-forwarded-host"] as string) || (req.headers.host as string) || "";
+      const fbParam = VS_STREAM_PROXY && selfHost ? `&fb=${encodeURIComponent(`${selfProto}://${selfHost}`)}` : "";
+
       const rewritten = m3u8Content
         .split("\n")
         .map((line) => {
@@ -1062,6 +1078,10 @@ app.use((req, res, next) => {
           // Check if the URL is another m3u8 or a ts chunk
           if (fullUrl.includes(".m3u8")) {
             return `/api/vs-proxy/playlist.m3u8?url=${encodeURIComponent(cleanUrl)}${xParam}`;
+          } else if (VS_STREAM_PROXY) {
+            // Offload the heavy video bytes to the edge worker. The worker
+            // falls back to /api/vs-proxy/ts here if upstream rejects it.
+            return `${VS_STREAM_PROXY}/ts?url=${encodeURIComponent(cleanUrl)}${xParam}${fbParam}`;
           } else {
             return `/api/vs-proxy/ts?url=${encodeURIComponent(cleanUrl)}${xParam}`;
           }
@@ -1138,13 +1158,21 @@ app.use((req, res, next) => {
     const attempt = (u: string) => vsFetch(u, { headers: VS_UPSTREAM_HEADERS(req) }, 15000);
 
     try {
-      // Fast path: fetch with a token bound to THIS instance's IP.
-      let ownUrl = await vsOwnTokenUrl(targetUrl);
-      let fetchRes = await attempt(ownUrl).catch(() => null as any);
-      if (fetchRes && (fetchRes.status === 403 || fetchRes.status === 401)) {
-        // Our cached token expired: force-refresh once and retry.
-        ownUrl = await vsOwnTokenUrl(targetUrl, true);
-        fetchRes = await attempt(ownUrl).catch(() => fetchRes);
+      // Fastest path: segment hosts accept token-less requests (tokens are
+      // only enforced on playlists), so skip all token lookups. This removes
+      // a generate.php roundtrip on cold instances and shaves latency off
+      // EVERY segment — the main cause of the "heavy playback" stutter.
+      let retryUrl = targetUrl;
+      let fetchRes = await attempt(targetUrl).catch(() => null as any);
+      if (!fetchRes || fetchRes.status === 403 || fetchRes.status === 401) {
+        // This host does enforce tokens: attach one bound to THIS instance's IP.
+        retryUrl = await vsOwnTokenUrl(targetUrl);
+        fetchRes = await attempt(retryUrl).catch(() => fetchRes);
+        if (fetchRes && (fetchRes.status === 403 || fetchRes.status === 401)) {
+          // Our cached token expired: force-refresh once and retry.
+          retryUrl = await vsOwnTokenUrl(targetUrl, true);
+          fetchRes = await attempt(retryUrl).catch(() => fetchRes);
+        }
       }
       if ((!fetchRes || !fetchRes.ok) && xCtx) {
         // Link itself is dead: self-heal via fresh extraction (rare now)
@@ -1153,7 +1181,7 @@ app.use((req, res, next) => {
       }
       if (!fetchRes || !fetchRes.ok) {
         // one last quick retry — segment hosts occasionally hiccup
-        fetchRes = await attempt(ownUrl);
+        fetchRes = await attempt(retryUrl);
       }
       if (!fetchRes.ok) {
         return res.status(fetchRes.status).send("Failed to fetch ts");
