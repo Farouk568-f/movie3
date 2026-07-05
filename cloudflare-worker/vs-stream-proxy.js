@@ -87,11 +87,44 @@ export default {
     if (!upstream || !upstream.ok) {
       // Fall back to the main app's own segment proxy, which has the full
       // token + self-heal logic (fb = fallback origin, x = heal context).
+      //
+      // IMPORTANT: we must NOT use a 302 redirect here. A redirect response
+      // carries no CORS headers, so browsers block it (net::ERR_FAILED 302)
+      // and playback dies for any title whose CDN rejects the worker.
+      // Instead the worker fetches the fallback itself and streams it back
+      // with full CORS headers — invisible to the browser.
       const fb = url.searchParams.get("fb");
       if (fb && /^https?:\/\//i.test(fb)) {
         const x = url.searchParams.get("x");
         const fallback = `${fb.replace(/\/+$/, "")}/api/vs-proxy/ts?url=${encodeURIComponent(target)}${x ? `&x=${encodeURIComponent(x)}` : ""}`;
-        return Response.redirect(fallback, 302);
+        try {
+          const healed = await fetch(fallback, {
+            headers: {
+              "User-Agent": request.headers.get("User-Agent") || DEFAULT_UA,
+              ...(request.headers.get("Range") ? { Range: request.headers.get("Range") } : {}),
+            },
+            redirect: "follow",
+          });
+          if (healed.ok) {
+            const h = new Headers(CORS_HEADERS);
+            h.set("Content-Type", healed.headers.get("Content-Type") || "video/mp2t");
+            h.set("Cache-Control", "public, max-age=3600, s-maxage=86400, immutable");
+            h.set("X-VS-Fallback", "1");
+            const res = new Response(healed.body, { status: 200, headers: h });
+            // Cache the healed segment too, so the next viewers of this
+            // segment are served from the edge without hitting the app.
+            if (request.method === "GET" && !request.headers.get("Range")) {
+              try {
+                ctx.waitUntil(cache.put(cacheKey, res.clone()));
+              } catch (e) {
+                /* body too large for cache — still streamed to the viewer */
+              }
+            }
+            return res;
+          }
+        } catch (e) {
+          /* fallback unreachable — fall through to the 502 below */
+        }
       }
       return new Response(`Upstream error ${upstream ? upstream.status : "network"}`, {
         status: 502,
