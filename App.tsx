@@ -112,8 +112,10 @@ const App: React.FC = () => {
     const modalElement = document.querySelector('.details-modal-content');
     const navigationScope = modalElement || document;
 
-    if (!currentElement || !currentElement.matches('.focusable')) {
-      const firstFocusable = navigationScope.querySelector('.focusable') as HTMLElement;
+    // If a details modal is open but focus is stuck outside it (e.g. still on
+    // the card behind), pull focus into the modal so arrow keys always work.
+    if (!currentElement || !currentElement.matches('.focusable') || (modalElement && !modalElement.contains(currentElement))) {
+      const firstFocusable = ((modalElement?.querySelector('[data-focus-group="main-actions"][data-focus-index="0"]')) || navigationScope.querySelector('.focusable')) as HTMLElement;
       if (firstFocusable) {
         firstFocusable.focus();
         firstFocusable.scrollIntoView({ behavior: 'smooth', block: 'center', inline: 'nearest' });

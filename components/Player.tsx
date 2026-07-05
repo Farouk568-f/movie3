@@ -565,6 +565,10 @@ const VideoPlayer: React.FC<PlayerProps> = ({ item, itemType, initialSeason, ini
     const adVideoRef = useRef<HTMLVideoElement>(null);
     const totalAdTimeRef = useRef(0);
     const lastAdTimeRef = useRef(0);
+    // Tracks REAL watched time of the main video (seeking is ignored),
+    // so jumping on the progress bar never triggers the ad pause.
+    const mainWatchTimeRef = useRef(0);
+    const lastMainTimeRef = useRef(0);
 
     const AD_SOURCES = [
         "https://media.w3.org/2010/05/sintel/trailer.mp4?utm_source=chatgpt.com",
@@ -1281,9 +1285,17 @@ const VideoPlayer: React.FC<PlayerProps> = ({ item, itemType, initialSeason, ini
                 return;
             }
             setCurrentTime(video.currentTime);
-            
-            // Ad trigger logic (5 minutes = 300 seconds)
-            if (!adStateRef.current.hasPlayedInSession && !adStateRef.current.isActive && video.currentTime >= 300) {
+
+            // Accumulate only continuously-watched time. Large jumps (seeks)
+            // are excluded so moving on the progress bar never pauses playback.
+            const mainDelta = video.currentTime - lastMainTimeRef.current;
+            if (mainDelta > 0 && mainDelta < 1) {
+                mainWatchTimeRef.current += mainDelta;
+            }
+            lastMainTimeRef.current = video.currentTime;
+
+            // Ad trigger logic (after 5 minutes = 300 seconds of actual watched playback)
+            if (!adStateRef.current.hasPlayedInSession && !adStateRef.current.isActive && mainWatchTimeRef.current >= 300) {
                 totalAdTimeRef.current = 0;
                 lastAdTimeRef.current = 0;
                 setAdState(prev => ({ ...prev, isActive: true, skipCountdown: 5, adProgress: 0 }));
@@ -1438,6 +1450,14 @@ const VideoPlayer: React.FC<PlayerProps> = ({ item, itemType, initialSeason, ini
             const isFocusInPlayer = allPlayerFocusables.includes(active);
 
             if (!isFocusInPlayer) {
+                // Controls are hidden: OK toggles play/pause instead of revealing them.
+                // Arrow keys still reveal the controls.
+                if ((e.key === 'Enter' || e.key === ' ') && !isOverlayVisible) {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    togglePlay();
+                    return;
+                }
                 if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Enter', ' '].includes(e.key)) {
                     e.preventDefault();
                     e.stopPropagation();
@@ -1876,6 +1896,22 @@ const VideoPlayer: React.FC<PlayerProps> = ({ item, itemType, initialSeason, ini
                                 canSkip: newCountdown === 0,
                                 skipCountdown: newCountdown
                             }));
+                        }}
+                        onError={() => {
+                            // If an ad fails to load, never freeze playback:
+                            // try the next ad, or end ads and resume the video.
+                            if (adState.adIndex < AD_SOURCES.length - 1) {
+                                setAdState(prev => ({
+                                    ...prev,
+                                    adIndex: prev.adIndex + 1,
+                                    canSkip: false,
+                                    skipCountdown: 5,
+                                    adProgress: 0
+                                }));
+                            } else {
+                                setAdState(prev => ({ ...prev, isActive: false, hasPlayedInSession: true }));
+                                videoRef.current?.play().catch(()=>{});
+                            }
                         }}
                         onEnded={() => {
                             if (adState.adIndex < AD_SOURCES.length - 1) {

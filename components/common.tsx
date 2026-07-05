@@ -220,11 +220,22 @@ export const DetailsModal: React.FC<{ item: Movie, onClose: () => void }> = ({ i
     
     useEffect(() => {
         document.body.classList.add('modal-open');
-        playButtonRef.current?.focus();
         return () => {
             document.body.classList.remove('modal-open');
         };
     }, []);
+
+    // Auto-focus the Play button once the details finish loading.
+    // (On mount the modal still shows the loading spinner, so focusing
+    // immediately never worked — arrows then selected nothing for movies.)
+    useEffect(() => {
+        if (!loading && details) {
+            const timer = setTimeout(() => {
+                playButtonRef.current?.focus({ preventScroll: true });
+            }, 100);
+            return () => clearTimeout(timer);
+        }
+    }, [loading, details]);
     
     // New Unified Keyboard Navigation Handler
     useEffect(() => {
