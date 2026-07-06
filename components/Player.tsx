@@ -31,6 +31,7 @@ import { fetchStreamUrl, fetchFromTMDB, analyzeSubtitlesForSkips, streamDubbing,
 import { useAddons } from '../addons/AddonContext';
 import { collectAddonPlayerConfig, fetchAddonSubtitles } from '../addons/playerBridge';
 import { translateSrtWithGemini } from '../services/geminiSubtitleService';
+import { translateSrtFast, FAST_TRANSLATE_LANGS } from '../services/fastSubtitleTranslateService';
 import * as Icons from './Icons';
 import { IMAGE_BASE_URL, BACKDROP_SIZE_MEDIUM } from '../contexts/constants';
 import { translateSrtViaGoogle } from '../services/translationService';
@@ -302,7 +303,10 @@ const SubtitlesPanel: React.FC<{
     aiLangs?: { code: string; label: string }[],
     onAiTranslate?: (code: string, label: string) => void,
     aiLoadingLabel?: string | null,
-}> = ({ tracks, activeLang, onSelect, onClose, triggerRef, show, aiLangs, onAiTranslate, aiLoadingLabel }) => {
+    quickLangs?: { code: string; label: string }[],
+    onQuickTranslate?: (code: string, label: string) => void,
+    quickLoadingLabel?: string | null,
+}> = ({ tracks, activeLang, onSelect, onClose, triggerRef, show, aiLangs, onAiTranslate, aiLoadingLabel, quickLangs, onQuickTranslate, quickLoadingLabel }) => {
 
     // Return focus on close
     useEffect(() => {
@@ -313,6 +317,8 @@ const SubtitlesPanel: React.FC<{
 
     // AI targets that have not been generated yet (generated ones appear as normal tracks above)
     const pendingAiLangs = (aiLangs || []).filter(l => !tracks.some(t => t.lang === `ai-${l.code}`));
+    // Quick-translate targets that have not been generated yet
+    const pendingQuickLangs = (quickLangs || []).filter(l => !tracks.some(t => t.lang === `qt-${l.code}`));
 
     return (
         <SidePanel title="Subtitles" onClose={onClose} show={show}>
@@ -338,6 +344,27 @@ const SubtitlesPanel: React.FC<{
                                 {aiLoadingLabel === lang.label
                                     ? <div className="w-3.5 h-3.5 border-2 border-zinc-400 border-t-white rounded-full animate-spin" />
                                     : <i className="fa-solid fa-wand-magic-sparkles text-xs text-purple-400" />}
+                            </button>
+                        ))}
+                    </>
+                )}
+                {pendingQuickLangs.length > 0 && onQuickTranslate && (
+                    <>
+                        <div className="flex items-center gap-2 mt-3 mb-1 px-1">
+                            <i className="fa-solid fa-bolt text-xs text-amber-400" />
+                            <span className="text-zinc-500 text-[10px] uppercase tracking-widest font-bold">Quick Translate</span>
+                        </div>
+                        {pendingQuickLangs.map(lang => (
+                            <button
+                                key={`qt-${lang.code}`}
+                                disabled={!!quickLoadingLabel}
+                                onClick={() => { onQuickTranslate(lang.code, lang.label); }}
+                                className={`player-panel-button justify-between ${quickLoadingLabel === lang.label ? 'active' : ''} ${quickLoadingLabel ? 'opacity-60' : ''}`}
+                            >
+                                <span>{lang.label}</span>
+                                {quickLoadingLabel === lang.label
+                                    ? <div className="w-3.5 h-3.5 border-2 border-zinc-400 border-t-white rounded-full animate-spin" />
+                                    : <i className="fa-solid fa-bolt text-xs text-amber-400" />}
                             </button>
                         ))}
                     </>
@@ -680,6 +707,10 @@ const VideoPlayer: React.FC<PlayerProps> = ({ item, itemType, initialSeason, ini
     const [addonSubtitles, setAddonSubtitles] = useState<SubtitleTrack[]>([]);
     const [aiVttTracks, setAiVttTracks] = useState<{ lang: string; url: string; label: string }[]>([]);
     const [aiSubLoadingLabel, setAiSubLoadingLabel] = useState<string | null>(null);
+    // Quick (non-AI) subtitle translation: offered when the stream only has
+    // subtitles in a single language, so it can be translated fast for free.
+    const [quickVttTracks, setQuickVttTracks] = useState<{ lang: string; url: string; label: string }[]>([]);
+    const [quickSubLoadingLabel, setQuickSubLoadingLabel] = useState<string | null>(null);
     const aiSubProgressRef = useRef('');
     const autoSkipDoneRef = useRef<{ intro?: boolean; outro?: boolean }>({});
     const skipAnalysisFromAddonRef = useRef(false);
@@ -694,6 +725,15 @@ const VideoPlayer: React.FC<PlayerProps> = ({ item, itemType, initialSeason, ini
         }
         return merged;
     }, [subtitles, addonSubtitles]);
+
+    // Quick-translate targets: only offered when subtitles exist in exactly
+    // ONE language, so the user can instantly get them in other languages.
+    const quickTranslateLangs = useMemo(() => {
+        if (allSubtitles.length === 0) return [];
+        const langs = new Set(allSubtitles.map(s => (s.language || '').split(/[-_]/)[0].toLowerCase()));
+        if (langs.size !== 1) return [];
+        return FAST_TRANSLATE_LANGS.filter(l => !langs.has(l.code));
+    }, [allSubtitles]);
     const [activeCues, setActiveCues] = useState<VTTCue[]>([]);
     const defaultSubtitleSettings: SubtitleSettings = { fontSize: 100, backgroundOpacity: 0, edgeStyle: 'outline', verticalPosition: 10, timingOffset: 0 };
     // Time Offset is intentionally NOT restored from saved settings: the right
@@ -880,6 +920,7 @@ const VideoPlayer: React.FC<PlayerProps> = ({ item, itemType, initialSeason, ini
             setSkipSegments({ intro: null, outro: null });
             // Reset addon-provided subtitle state for the new title
             setAddonSubtitles([]);
+            setQuickVttTracks([]);
             setAiVttTracks(prev => { prev.forEach(t2 => URL.revokeObjectURL(t2.url)); return []; });
             autoSkipDoneRef.current = {};
             skipAnalysisFromAddonRef.current = false;
@@ -1257,7 +1298,7 @@ const VideoPlayer: React.FC<PlayerProps> = ({ item, itemType, initialSeason, ini
         } else { setActiveCues([]); }
 
         return () => { if (activeTrack) activeTrack.removeEventListener('cuechange', onCueChange); };
-    }, [activeSubtitleLang, vttTracks, aiVttTracks]);
+    }, [activeSubtitleLang, vttTracks, aiVttTracks, quickVttTracks]);
 
     // Subtitle timing offset (+/-): shifts every cue by the configured amount.
     // Original times are remembered on each cue, so the offset is always
@@ -1284,7 +1325,7 @@ const VideoPlayer: React.FC<PlayerProps> = ({ item, itemType, initialSeason, ini
         // Cues can load asynchronously after tracks mount, so retry briefly.
         const timers = [setTimeout(applyOffset, 500), setTimeout(applyOffset, 2000)];
         return () => timers.forEach(clearTimeout);
-    }, [subtitleSettings.timingOffset, activeSubtitleLang, vttTracks, aiVttTracks]);
+    }, [subtitleSettings.timingOffset, activeSubtitleLang, vttTracks, aiVttTracks, quickVttTracks]);
 
     useEffect(() => {
         if (userLanguage === 'ar' && vttTracks.length > 0) {
@@ -1710,6 +1751,42 @@ const VideoPlayer: React.FC<PlayerProps> = ({ item, itemType, initialSeason, ini
         }
     }, [aiVttTracks, aiSubLoadingLabel, allSubtitles, setToast]);
 
+    // Quick (non-AI) subtitle translation: when the title only has one
+    // subtitle language, translate it fast with free machine translation
+    // (no AI, no API key) and add it as a normal subtitle track.
+    const handleQuickTranslate = useCallback(async (code: string, label: string) => {
+        const qtLang = `qt-${code}`;
+        const existing = quickVttTracks.find(t2 => t2.lang === qtLang);
+        if (existing) { setActiveSubtitleLang(qtLang); return; }
+        if (quickSubLoadingLabel) return;
+        const source = allSubtitles[0];
+        if (!source) {
+            setToast({ message: 'No subtitles available to translate yet', type: 'error' });
+            return;
+        }
+        setQuickSubLoadingLabel(label);
+        try {
+            const res = await fetch(source.url);
+            if (!res.ok) throw new Error('Could not download the source subtitles');
+            const srtText = await res.text();
+            const translated = await translateSrtFast(srtText, code);
+            // Convert translated SRT to a VTT blob track
+            const srtTimestampLineRegex = /(\d{2}:\d{2}:\d{2}[,.]\d{3})\s*-->\s*(\d{2}:\d{2}:\d{2}[,.]\d{3})/g;
+            let vttContent = "WEBVTT\n\n";
+            vttContent += translated.replace(/\r/g, '').replace(srtTimestampLineRegex, (_, s, e) => `${s.replace(',', '.')} --> ${e.replace(',', '.')}`);
+            const vttUrl = URL.createObjectURL(new Blob([vttContent], { type: 'text/vtt' }));
+            const track = { lang: qtLang, url: vttUrl, label: `⚡ ${label}` };
+            setQuickVttTracks(prev => [...prev.filter(p => p.lang !== qtLang), track]);
+            setActiveSubtitleLang(qtLang);
+            setToast({ message: `Subtitles translated: ${label}`, type: 'success' });
+        } catch (e: any) {
+            console.error('Quick subtitle translation failed:', e);
+            setToast({ message: e?.message || 'Quick subtitle translation failed', type: 'error' });
+        } finally {
+            setQuickSubLoadingLabel(null);
+        }
+    }, [quickVttTracks, quickSubLoadingLabel, allSubtitles, setToast]);
+
     const handleSkip = useCallback(() => {
         const video = videoRef.current;
         if (!video || !activeSkip || !skipSegments[activeSkip]) return;
@@ -2023,7 +2100,7 @@ const VideoPlayer: React.FC<PlayerProps> = ({ item, itemType, initialSeason, ini
                     preload="metadata"
                     poster="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7"
                 >
-                {[...vttTracks, ...aiVttTracks].map(track => (
+                {[...vttTracks, ...aiVttTracks, ...quickVttTracks].map(track => (
                         <track key={track.lang} kind="subtitles" srcLang={track.lang} src={track.url} label={track.label} default={activeSubtitleLang === track.lang} />
                     ))}
                 </video>
@@ -2193,7 +2270,7 @@ const VideoPlayer: React.FC<PlayerProps> = ({ item, itemType, initialSeason, ini
 
                 <SubtitlesPanel
                     show={showSubtitlesPanel}
-                    tracks={[...vttTracks, ...aiVttTracks]}
+                    tracks={[...vttTracks, ...aiVttTracks, ...quickVttTracks]}
                     activeLang={activeSubtitleLang}
                     onSelect={setActiveSubtitleLang}
                     onClose={() => setShowSubtitlesPanel(false)}
@@ -2201,6 +2278,9 @@ const VideoPlayer: React.FC<PlayerProps> = ({ item, itemType, initialSeason, ini
                     aiLangs={addonPlayerConfig.aiTranslate}
                     onAiTranslate={handleAiTranslate}
                     aiLoadingLabel={aiSubLoadingLabel}
+                    quickLangs={quickTranslateLangs}
+                    onQuickTranslate={handleQuickTranslate}
+                    quickLoadingLabel={quickSubLoadingLabel}
                 />
 
                 <SettingsPanel
