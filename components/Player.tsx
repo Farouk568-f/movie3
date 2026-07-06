@@ -726,12 +726,12 @@ const VideoPlayer: React.FC<PlayerProps> = ({ item, itemType, initialSeason, ini
         return merged;
     }, [subtitles, addonSubtitles]);
 
-    // Quick-translate targets: only offered when subtitles exist in exactly
-    // ONE language, so the user can instantly get them in other languages.
+    // Quick-translate targets: offered for every language that is MISSING from
+    // the available subtitle tracks (e.g. Arabic not available -> offer it),
+    // as long as at least one source track exists to translate from.
     const quickTranslateLangs = useMemo(() => {
         if (allSubtitles.length === 0) return [];
         const langs = new Set(allSubtitles.map(s => (s.language || '').split(/[-_]/)[0].toLowerCase()));
-        if (langs.size !== 1) return [];
         return FAST_TRANSLATE_LANGS.filter(l => !langs.has(l.code));
     }, [allSubtitles]);
     const [activeCues, setActiveCues] = useState<VTTCue[]>([]);
@@ -1759,7 +1759,9 @@ const VideoPlayer: React.FC<PlayerProps> = ({ item, itemType, initialSeason, ini
         const existing = quickVttTracks.find(t2 => t2.lang === qtLang);
         if (existing) { setActiveSubtitleLang(qtLang); return; }
         if (quickSubLoadingLabel) return;
-        const source = allSubtitles[0];
+        // Prefer an English track as the source when several languages exist
+        // (best translation quality); otherwise use the first available track.
+        const source = allSubtitles.find(s => (s.language || '').split(/[-_]/)[0].toLowerCase() === 'en') || allSubtitles[0];
         if (!source) {
             setToast({ message: 'No subtitles available to translate yet', type: 'error' });
             return;
