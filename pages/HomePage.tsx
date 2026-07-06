@@ -86,28 +86,7 @@ const AmbientBackground: React.FC<{ imageUrl: string | null }> = ({
   );
 };
 
-const HERO_ROTATION_INTERVAL_MS = 30 * 1000; // Rotate hero slide every 30 seconds
-
-// The rotation cycle is anchored to a persistent epoch so leaving and
-// re-entering the page NEVER restarts the loop — it just keeps ticking
-// every 30 seconds and wraps back to the first slide when it reaches the end.
-const getHeroRotationEpoch = (): number => {
-  try {
-    const stored = sessionStorage.getItem("heroRotationEpoch");
-    if (stored) return Number(stored);
-    const now = Date.now();
-    sessionStorage.setItem("heroRotationEpoch", String(now));
-    return now;
-  } catch {
-    return 0;
-  }
-};
-
-const computeHeroIndex = (slideCount: number): number => {
-  if (slideCount <= 0) return 0;
-  const elapsed = Math.max(0, Date.now() - getHeroRotationEpoch());
-  return Math.floor(elapsed / HERO_ROTATION_INTERVAL_MS) % slideCount;
-};
+const HERO_ROTATION_INTERVAL_MS = 5 * 60 * 1000; // Rotate hero slide every 5 minutes
 
 interface HeroSlide {
   backdropUrl: string;
@@ -147,7 +126,7 @@ const Hero: React.FC<{ slide: HeroSlide; isKids: boolean }> = ({
   const accentClass = isKids ? "text-blue-500" : "text-red-600";
 
   return (
-    <div className="relative w-full h-[78vh] min-h-[400px] text-white overflow-hidden rounded-xl">
+    <div className="relative w-full h-[90vh] min-h-[400px] text-white overflow-hidden rounded-xl">
       <style>{`@keyframes heroBackdropFade { from { opacity: 0; } to { opacity: 1; } }`}</style>
       <img
         key={slide.backdropUrl}
@@ -1291,9 +1270,8 @@ const HomePage: React.FC = () => {
         (s) =>
           s.titleText.toLowerCase() !== defaultSlide.titleText.toLowerCase(),
       );
-      const slides = [defaultSlide, ...unique];
-      setHeroSlides(slides);
-      setHeroIndex(computeHeroIndex(slides.length));
+      setHeroSlides([defaultSlide, ...unique]);
+      setHeroIndex(0);
     };
 
     buildSlides();
@@ -1302,14 +1280,12 @@ const HomePage: React.FC = () => {
     };
   }, [data.trending, data.watchTogetherKids, isKidsMode]);
 
-  // Rotate the hero slide every 30 seconds, continuously — the cycle keeps
-  // running even if the user leaves and re-enters the page (no restart),
-  // and loops back to the first slide after the last one.
+  // Rotate the hero slide every 5 minutes
   useEffect(() => {
     if (heroSlides.length <= 1) return;
-    const tick = () => setHeroIndex(computeHeroIndex(heroSlides.length));
-    tick();
-    const interval = setInterval(tick, 1000);
+    const interval = setInterval(() => {
+      setHeroIndex((i) => (i + 1) % heroSlides.length);
+    }, HERO_ROTATION_INTERVAL_MS);
     return () => clearInterval(interval);
   }, [heroSlides.length]);
 
