@@ -389,9 +389,9 @@ const SettingsPanel: React.FC<{
                 <span>{t('dubbing')}</span>
                 <span className="text-zinc-500 text-xs uppercase tracking-wider font-bold">Coming Soon</span>
             </button>
-            <button onClick={() => onToggleEnhancement()} className="player-panel-button justify-between">
+            <button disabled className="player-panel-button justify-between opacity-50 cursor-not-allowed">
                 <span>4K Video Enhancer (AI)</span>
-                <span className={`text-zinc-400 ${isEnhancementActive ? 'text-green-500 font-bold' : ''}`}>{isEnhancementActive ? 'On' : 'Off'}</span>
+                <span className="text-zinc-500 text-xs uppercase tracking-wider font-bold">Coming Soon</span>
             </button>
             <button ref={el => {mainPanelButtonsRef.current['speed'] = el}} onClick={() => setView('speed')} className="player-panel-button justify-between">
                 <span>{t('playbackSpeed')}</span>
