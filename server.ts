@@ -1131,14 +1131,38 @@ app.use((req, res, next) => {
         }
       }
     } catch {}
-    // Append MovieBox subs (deduped by URL) after the current sources.
+    // Append MovieBox subs (deduped by URL) after the current sources —
+    // but NEVER delay the stream response for them: MovieBox gets a short
+    // grace window only. If it is slower, the stream is returned right away
+    // and MovieBox finishes in the BACKGROUND, updating the subtitle cache
+    // so the next request for this title has them instantly.
     try {
-      const mbSubs = await movieBoxPromise;
-      if (mbSubs.length) {
+      const mbSubs = await Promise.race([
+        movieBoxPromise,
+        new Promise<null>((resolve) => setTimeout(() => resolve(null), 800)),
+      ]);
+      if (mbSubs && mbSubs.length) {
         const seen = new Set(subs.map((s) => s.url));
         for (const s of mbSubs) {
           if (!seen.has(s.url)) { seen.add(s.url); subs.push(s); }
         }
+      } else if (mbSubs === null) {
+        // Too slow right now — merge later in the background (cache only).
+        const baseSubs = subs.slice();
+        movieBoxPromise.then(async (late) => {
+          try {
+            if (!late || !late.length) return;
+            const merged = baseSubs.slice();
+            const seen = new Set(merged.map((s) => s.url));
+            for (const s of late) {
+              if (!seen.has(s.url)) { seen.add(s.url); merged.push(s); }
+            }
+            if (merged.length > baseSubs.length) {
+              vsCacheSet(key, merged, true);
+              if (redis) { try { await redis.set(key, JSON.stringify(merged), { ex: 60 * 60 * 12 }); } catch {} }
+            }
+          } catch {}
+        }).catch(() => {});
       }
     } catch {}
     if (subs.length) {
