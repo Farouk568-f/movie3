@@ -173,7 +173,8 @@ const App: React.FC = () => {
                 }
                 break;
             case 'ArrowDown':
-                if (dy > 0) {
+                // Only consider elements genuinely below (not on the same row).
+                if (dy > 0 && candidateRect.top >= currentRect.bottom - 5) {
                     distance = Math.abs(dx) * 2 + dy;
                     if (distance < minDistance) {
                         minDistance = distance;
@@ -182,7 +183,8 @@ const App: React.FC = () => {
                 }
                 break;
             case 'ArrowUp':
-                if (dy < 0) {
+                // Only consider elements genuinely above (not on the same row).
+                if (dy < 0 && candidateRect.bottom <= currentRect.top + 5) {
                     distance = Math.abs(dx) * 2 + Math.abs(dy);
                     if (distance < minDistance) {
                         minDistance = distance;
