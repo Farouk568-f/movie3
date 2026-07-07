@@ -1482,17 +1482,47 @@ const VideoPlayer: React.FC<PlayerProps> = ({ item, itemType, initialSeason, ini
                 createdUrls.push(vttUrl);
                 return vttUrl;
             };
+
             const newTracks: { lang: string; url: string; label: string }[] = [];
-            for (const sub of allSubtitles) {
+            
+            const enSub = allSubtitles.find(s => (s.language || '').split(/[-_]/)[0].toLowerCase() === 'en');
+            let enSrtText: string | null = null;
+            if (enSub) {
                 try {
+                    const res = await fetch(enSub.url);
+                    if (res.ok && active) enSrtText = await res.text();
+                } catch (e) { console.error("Failed to fetch English subtitle", e); }
+            }
+
+            if (enSub && enSrtText) {
+                const vttUrl = processSrtToVtt(enSrtText);
+                newTracks.push({ lang: enSub.language, url: vttUrl, label: enSub.display });
+                if (active) setVttTracks([...newTracks]);
+            }
+
+            for (const sub of allSubtitles) {
+                if (enSub && sub.language === enSub.language) continue;
+
+                try {
+                    // Fetch and keep the original moviebox translation
                     const res = await fetch(sub.url);
-                    if (!res.ok || !active) continue;
-                    const srtText = await res.text();
-                    const vttUrl = processSrtToVtt(srtText);
-                    newTracks.push({ lang: sub.language, url: vttUrl, label: sub.display });
+                    if (res.ok && active) {
+                        const originalSrt = await res.text();
+                        const originalVttUrl = processSrtToVtt(originalSrt);
+                        newTracks.push({ lang: sub.language, url: originalVttUrl, label: sub.display });
+                        if (active) setVttTracks([...newTracks]);
+                    }
+
+                    // Also generate the auto-translated one from English for perfect timing
+                    if (enSrtText) {
+                        const targetLangCode = (sub.language || '').split(/[-_]/)[0].toLowerCase();
+                        const translatedSrtText = await translateSrtFast(enSrtText, targetLangCode);
+                        const autoVttUrl = processSrtToVtt(translatedSrtText);
+                        newTracks.push({ lang: `auto-${sub.language}`, url: autoVttUrl, label: `${sub.display} (Auto Timing)` });
+                        if (active) setVttTracks([...newTracks]);
+                    }
                 } catch (e) { console.error(`Failed to process subtitle: ${sub.display}`, e); }
             }
-            if (active) setVttTracks(newTracks);
         };
         const timer = setTimeout(() => {
             if (allSubtitles.length > 0) processSubtitles(); else setVttTracks([]);
