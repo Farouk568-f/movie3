@@ -11,7 +11,7 @@ import TvShowsPage from './pages/TvShowsPage';
 import DetailsPage from './pages/DetailsPage';
 import CinemaPage from './pages/CinemaPage';
 import LiveRoomPage from './pages/LiveRoomPage';
-import ShortsPage from './pages/ShortsPage'; 
+import ShortsPage from './pages/ShortsPage';
 import YouPage from './pages/YouPage';
 import AISearchPage from './pages/AISearchPage';
 import IframePlayerPage from './pages/IframePlayerPage';
@@ -77,6 +77,33 @@ const AppUpdateNotice: React.FC = () => {
       /* localStorage unavailable — skip notice */
     }
   }, [setToast]);
+  return null;
+};
+
+// One-time toast announcing subtitle fix & cache reset advice. Shown once per
+// device the first time the app is opened after this update ships.
+const SUBTITLE_UPDATE_NOTICE_KEY = 'cineSubtitleUpdateNoticeV1';
+const SubtitleUpdateNotice: React.FC = () => {
+  const { setToast } = useProfile();
+  const { language } = useTranslation();
+  useEffect(() => {
+    try {
+      if (localStorage.getItem(SUBTITLE_UPDATE_NOTICE_KEY) === '1') return;
+      const timer = window.setTimeout(() => {
+        const msg = language === 'ar'
+          ? 'تم إصلاح مشكلة الترجمة: يرجى مسح الـ cache أو إعادة تعيين الكاش لكي تعمل بشكل صحيح.'
+          : 'fixed subtitle : you can reset or remove your cache to make it work';
+        setToast({
+          message: msg,
+          type: 'success',
+        });
+      }, 2400); // Wait a bit longer to prevent overlapping with other on-start toasts
+      localStorage.setItem(SUBTITLE_UPDATE_NOTICE_KEY, '1');
+      return () => window.clearTimeout(timer);
+    } catch {
+      /* localStorage unavailable — skip notice */
+    }
+  }, [setToast, language]);
   return null;
 };
 
@@ -288,6 +315,7 @@ const App: React.FC = () => {
           <ToastContainer />
           <SystemUpdateNotice />
           <AppUpdateNotice />
+          <SubtitleUpdateNotice />
         </AddonProvider>
       </ProfileProvider>
     </LanguageProvider>
