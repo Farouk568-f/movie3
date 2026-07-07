@@ -68,6 +68,96 @@ const DetailsPage: React.FC = () => {
   const [prefetchedStreamUrl, setPrefetchedStreamUrl] = useState<string | null>(null);
   const playButtonRef = useRef<HTMLButtonElement>(null);
 
+  // ---- Details-page ad: auto-plays a few seconds after the page loads ----
+  // NOTE: Ad sources MUST be permanent, CORS-friendly, non-IP-locked MP4 URLs.
+  const DETAILS_AD_SOURCES = [
+      "https://media.w3.org/2010/05/sintel/trailer.mp4",
+      "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerJoyrides.mp4"
+  ];
+  const detailsAdRef = useRef<HTMLVideoElement>(null);
+  const detailsAdStartedRef = useRef(false);
+  const [showAd, setShowAd] = useState(false);
+  const [adIndex, setAdIndex] = useState(0);
+  const [adStarted, setAdStarted] = useState(false);
+  const [adDone, setAdDone] = useState(false);
+  const [adMuted, setAdMuted] = useState(true);
+
+  // Reset + schedule the ad on every new title (starts a few seconds after load)
+  useEffect(() => {
+      setShowAd(false);
+      setAdIndex(0);
+      setAdStarted(false);
+      setAdDone(false);
+      setAdMuted(true);
+      detailsAdStartedRef.current = false;
+      if (loading || !item) return;
+      const timer = setTimeout(() => setShowAd(true), 3000);
+      return () => clearTimeout(timer);
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [loading, item?.id]);
+
+  // Load + autoplay the ad. ALWAYS starts muted (muted autoplay is the only
+  // playback universally allowed, especially on TV WebViews), with retry
+  // kicks for TVs that ignore the first play() call.
+  useEffect(() => {
+      const vid = detailsAdRef.current;
+      if (!showAd || adDone || !vid) return;
+      detailsAdStartedRef.current = false;
+      setAdStarted(false);
+      vid.setAttribute('webkit-playsinline', '');
+      vid.setAttribute('playsinline', '');
+      vid.defaultMuted = true;
+      vid.muted = true;
+      vid.src = DETAILS_AD_SOURCES[adIndex];
+      vid.load();
+      let cancelled = false;
+      const attemptPlay = () => {
+          if (cancelled) return;
+          vid.muted = true;
+          setAdMuted(true);
+          vid.play().catch(() => {});
+      };
+      attemptPlay();
+      const kick = setInterval(() => { if (!cancelled && !detailsAdStartedRef.current) attemptPlay(); }, 2000);
+      // Watchdog: if this source never starts within 10s, try the next one,
+      // or silently give up and keep showing the backdrop image.
+      const watchdog = setTimeout(() => {
+          if (!detailsAdStartedRef.current) {
+              if (adIndex < DETAILS_AD_SOURCES.length - 1) setAdIndex(i => i + 1);
+              else setAdDone(true);
+          }
+      }, 10000);
+      return () => {
+          cancelled = true;
+          clearInterval(kick);
+          clearTimeout(watchdog);
+          vid.pause();
+          vid.removeAttribute('src');
+          vid.load();
+      };
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [showAd, adIndex, adDone]);
+
+  // Mute/unmute the ad. If the device silently pauses on unmute (some TVs),
+  // revert to muted playback instead of stopping the ad.
+  const toggleAdMute = (e: React.MouseEvent) => {
+      e.stopPropagation();
+      const vid = detailsAdRef.current;
+      if (!vid) return;
+      const nextMuted = !adMuted;
+      vid.muted = nextMuted;
+      setAdMuted(nextMuted);
+      if (!nextMuted) {
+          setTimeout(() => {
+              if (vid.paused) {
+                  vid.muted = true;
+                  setAdMuted(true);
+                  vid.play().catch(() => {});
+              }
+          }, 300);
+      }
+  };
+
   useEffect(() => {
     if (!loading && item) {
       const timer = setTimeout(() => {
@@ -223,15 +313,58 @@ const DetailsPage: React.FC = () => {
         <div className="absolute top-20 start-4 z-20 animate-fade-in" style={{animationDelay: '0.5s'}}>
             <button onClick={() => navigate(-1)} className="w-10 h-10 text-white bg-black/50 rounded-full backdrop-blur-sm transition-transform btn-press focusable" tabIndex={0}><i className="fa-solid fa-arrow-left"></i></button>
         </div>
+        {/* Details-page ad: rendered UNDER the backdrop image, which stays
+            visible (no gray placeholder ever) until real ad frames render. */}
+        {showAd && !adDone && (
+          <video
+            ref={detailsAdRef}
+            className="absolute inset-0 w-full h-full object-cover"
+            autoPlay
+            muted
+            playsInline
+            preload="auto"
+            poster="data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20width='16'%20height='9'%3E%3Crect%20width='16'%20height='9'%20fill='black'/%3E%3C/svg%3E"
+            onPlaying={() => { detailsAdStartedRef.current = true; setAdStarted(true); }}
+            onTimeUpdate={(e) => {
+              // Extra "started" signal for TV WebViews that never fire `playing`
+              const v = e.target as HTMLVideoElement;
+              if (!detailsAdStartedRef.current && v.currentTime > 0.1) {
+                detailsAdStartedRef.current = true;
+                setAdStarted(true);
+              }
+            }}
+            onEnded={() => setAdDone(true)}
+            onError={() => {
+              // Ignore the error fired by cleanup (empty src); otherwise try
+              // the next ad source, or give up and restore the backdrop.
+              if (!detailsAdRef.current?.getAttribute('src')) return;
+              if (adIndex < DETAILS_AD_SOURCES.length - 1) setAdIndex(i => i + 1);
+              else setAdDone(true);
+            }}
+          />
+        )}
         <img
           src={`${IMAGE_BASE_URL}${BACKDROP_SIZE}${item.backdrop_path}`}
           srcSet={`${IMAGE_BASE_URL}${BACKDROP_SIZE_MEDIUM}${item.backdrop_path} 780w, ${IMAGE_BASE_URL}${BACKDROP_SIZE}${item.backdrop_path} 1280w`}
           sizes="100vw"
           alt={item.title || item.name}
-          className="absolute inset-0 object-cover object-top w-full h-full"
+          className={`absolute inset-0 object-cover object-top w-full h-full transition-opacity duration-500 ${showAd && adStarted && !adDone ? 'opacity-0' : 'opacity-100'}`}
         />
         <div className="absolute inset-0 bg-gradient-to-t from-[var(--background)] via-[var(--background)]/80 to-transparent"></div>
         <div className={`absolute inset-0 ${language === 'ar' ? 'bg-gradient-to-r' : 'bg-gradient-to-l'} from-[var(--background)] to-transparent opacity-60`}></div>
+        {showAd && adStarted && !adDone && (
+          <div className="absolute top-20 end-4 z-20 flex items-center gap-2 animate-fade-in">
+            <span className="px-2 py-1 text-[10px] font-bold tracking-widest uppercase text-white bg-black/50 border border-white/30 rounded backdrop-blur-sm">Ad</span>
+            <button
+              onClick={toggleAdMute}
+              className="w-10 h-10 text-white bg-black/50 rounded-full backdrop-blur-sm transition-transform btn-press focusable"
+              tabIndex={0}
+              aria-label={adMuted ? 'Unmute ad' : 'Mute ad'}
+            >
+              <i className={`fa-solid ${adMuted ? 'fa-volume-xmark' : 'fa-volume-high'}`}></i>
+            </button>
+          </div>
+        )}
         
       </div>
       
