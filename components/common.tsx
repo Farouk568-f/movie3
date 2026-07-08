@@ -48,62 +48,199 @@ export const useToast = () => {
     return setToast;
 }
 
-const RecommendationCard: React.FC<{ item: Movie; dataFocusGroup?: string; dataFocusIndex?: number; }> = ({ item, dataFocusGroup, dataFocusIndex }) => {
+const RecommendationCard: React.FC<{ item: Movie; dataFocusGroup?: string; dataFocusIndex?: number; onCardFocus?: (el: HTMLElement) => void; }> = ({ item, dataFocusGroup, dataFocusIndex, onCardFocus }) => {
     const { setModalItem } = useProfile();
     const { t } = useTranslation();
     const { toggleFavorite, isKidsMode } = useProfile();
+    const [isFocused, setIsFocused] = useState(false);
+    const cardRef = useRef<HTMLDivElement>(null);
 
     const handleCardClick = () => {
         setModalItem(item);
     };
     
-    const handleAddToList = (e: React.MouseEvent) => {
-        e.stopPropagation();
-        toggleFavorite(item);
-    }
+    const handleFocus = useCallback(() => {
+        setIsFocused(true);
+        if (cardRef.current && onCardFocus) {
+            onCardFocus(cardRef.current);
+        }
+    }, [onCardFocus]);
+
+    const handleBlur = useCallback(() => {
+        setIsFocused(false);
+    }, []);
 
     if (!item.backdrop_path) return null;
 
     return (
         <div 
-            className={`bg-[var(--surface)] rounded-xl overflow-hidden cursor-pointer group shadow-lg focusable glow-card-container ${isKidsMode ? 'golden-worm-border' : ''}`} 
+            ref={cardRef}
+            className={`flex-shrink-0 w-[24vw] min-w-[220px] max-w-[320px] cursor-pointer group focusable glow-card-container interactive-card-container relative`} 
             onClick={handleCardClick}
             onKeyDown={(e) => e.key === 'Enter' && handleCardClick()}
+            onFocus={handleFocus}
+            onBlur={handleBlur}
+            onMouseEnter={() => setIsFocused(true)}
+            onMouseLeave={() => setIsFocused(false)}
             style={{ '--glow-image-url': `url(${IMAGE_BASE_URL}w500${item.backdrop_path})` } as React.CSSProperties}
             tabIndex={0}
             data-focus-group={dataFocusGroup}
             data-focus-index={dataFocusIndex}
         >
-            <div className={`bg-[var(--surface)] ${isKidsMode ? 'golden-worm-border-inner' : 'w-full h-full'}`}>
-            <div className="relative">
-                <img
-                    src={`${IMAGE_BASE_URL}${BACKDROP_SIZE_MEDIUM}${item.backdrop_path}`}
-                    alt={item.title || item.name}
-                    className="w-full aspect-video object-cover"
-                    loading="lazy"
-            decoding="async"
-                />
-                 <div className="absolute inset-0 bg-black/20 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
-                    <i className="fas fa-play text-white text-3xl drop-shadow-lg"></i>
-                </div>
-            </div>
-            <div className="p-4">
-                <div className="flex justify-between items-start">
-                    <div>
-                        <div className="flex items-center gap-2 text-xs mb-1">
-                            <span className="font-bold text-green-500">{(item.vote_average * 10).toFixed(0)}% {t('match')}</span>
-                            <span className="text-zinc-400">{item.release_date?.substring(0, 4) || item.first_air_date?.substring(0, 4)}</span>
+            <div className={`relative overflow-hidden transition-all duration-300 ease-in-out transform rounded-lg shadow-lg bg-[var(--surface)] interactive-card ${isKidsMode ? 'golden-worm-border' : ''}`}>
+                <div className={isKidsMode ? 'golden-worm-border-inner' : 'w-full h-full'}>
+                    <div className="relative w-full aspect-video bg-black">
+                        <img
+                            src={`${IMAGE_BASE_URL}${BACKDROP_SIZE_MEDIUM}${item.backdrop_path}`}
+                            alt={item.title || item.name}
+                            className="w-full aspect-video object-cover"
+                            loading="lazy"
+                            decoding="async"
+                        />
+                        <div className="absolute inset-0 bg-black/20 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
+                            <i className="fas fa-play text-white text-3xl drop-shadow-lg"></i>
                         </div>
-                        <span className='px-1.5 py-0.5 border border-white/50 text-[10px] rounded'>HD</span>
+                        
+                        <div className="absolute top-2 left-2 flex flex-col gap-1 z-10 pointer-events-none">
+                             <div className={`transform transition-all duration-300 ease-out ${isFocused ? 'translate-y-0 opacity-100 scale-100' : '-translate-y-4 opacity-0 scale-95'}`}>
+                                 <span className="px-2 py-0.5 text-[11px] font-bold text-white bg-green-600 rounded-sm shadow-md">
+                                     {(item.vote_average * 10).toFixed(0)}% {t('match')}
+                                 </span>
+                             </div>
+                             <div className={`transform transition-all duration-300 ease-out delay-75 ${isFocused ? 'translate-y-0 opacity-100 scale-100' : '-translate-y-4 opacity-0 scale-95'}`}>
+                                 <span className="px-2 py-0.5 text-[11px] font-bold text-white bg-black/60 backdrop-blur-sm rounded-sm shadow-md border border-white/20">
+                                     {item.release_date?.substring(0, 4) || item.first_air_date?.substring(0, 4)}
+                                 </span>
+                             </div>
+                        </div>
                     </div>
-                    <button onClick={handleAddToList} className="w-9 h-9 flex-shrink-0 flex items-center justify-center text-white border-2 border-zinc-500 rounded-full text-sm btn-press focusable hover:border-white"><i className="fas fa-plus"></i></button>
                 </div>
-                <p className="text-xs text-zinc-300 mt-3 line-clamp-3 leading-relaxed">{item.overview}</p>
             </div>
+            
+            <div
+                className={`absolute -bottom-10 left-2 right-2 text-left transition-all duration-300 ease-in-out ${isFocused ? "opacity-100" : "opacity-0 pointer-events-none"}`}
+            >
+                <p className="text-sm font-semibold text-white truncate drop-shadow-lg">
+                    {item.title || item.name}
+                </p>
             </div>
         </div>
     );
 };
+
+const SimilarRow: React.FC<{ movies: Movie[] }> = ({ movies }) => {
+    const scrollContainerRef = useRef<HTMLDivElement>(null);
+    const rowContentRef = useRef<HTMLDivElement>(null);
+    const { t } = useTranslation();
+    const [isRowActive, setIsRowActive] = useState(false);
+    
+    const handleCardFocus = useCallback((cardElement: HTMLElement) => {
+        if (!scrollContainerRef.current || !rowContentRef.current) return;
+        const containerWidth = scrollContainerRef.current.clientWidth;
+        const contentWidth = rowContentRef.current.scrollWidth;
+        const padding = 40; 
+        
+        let targetScroll = cardElement.offsetLeft - padding;
+        const maxScroll = contentWidth - containerWidth;
+        if (targetScroll > maxScroll) targetScroll = maxScroll;
+        if (targetScroll < 0) targetScroll = 0;
+        
+        if (rowContentRef.current) {
+            rowContentRef.current.style.transform = `translateX(${-targetScroll}px)`;
+        }
+    }, []);
+
+    if (!movies || movies.length === 0) return null;
+
+    return (
+        <div 
+            className="mt-10 relative" 
+            id="similar-section"
+            onFocus={() => setIsRowActive(true)}
+            onBlur={(e) => {
+                if (!e.currentTarget.contains(e.relatedTarget as Node)) {
+                    setIsRowActive(false);
+                }
+            }}
+        >
+            <div className="flex items-baseline justify-between mb-3 px-2">
+                <h2
+                    className={`text-lg md:text-xl font-bold text-white transition-all duration-300 ease-out origin-left ${isRowActive ? "scale-100" : "scale-90 text-zinc-400"}`}
+                >
+                    {t('similar')}
+                </h2>
+            </div>
+            <div 
+                ref={scrollContainerRef}
+                className="overflow-x-hidden no-scrollbar py-12 -my-12 px-6 -mx-6" 
+            >
+                <div 
+                    ref={rowContentRef}
+                    className="flex flex-nowrap gap-x-6 px-2"
+                    style={{
+                        transition: "transform 0.25s cubic-bezier(0.4, 0, 0.2, 1)",
+                        willChange: "transform",
+                    }}
+                >
+                    {movies.filter(r => r.backdrop_path).slice(0, 15).map((rec, index) => (
+                        <RecommendationCard 
+                            key={rec.id} 
+                            item={rec} 
+                            dataFocusGroup="similar" 
+                            dataFocusIndex={index} 
+                            onCardFocus={handleCardFocus} 
+                        />
+                    ))}
+                </div>
+            </div>
+        </div>
+    );
+};
+
+// A memoized component that wraps the YouTube player element and doesn't re-render
+// when parent states (like isAdMuted) change, preventing the iframe from being destroyed.
+const YoutubeTrailerPlayer = React.memo(({ videoId, onPlayerReady, onStateChange, onError }: {
+    videoId: string;
+    onPlayerReady: (player: YTPlayer) => void;
+    onStateChange: (event: { data: number }) => void;
+    onError: () => void;
+}) => {
+    const containerRef = useRef<HTMLDivElement>(null);
+
+    useEffect(() => {
+        if (!window.YT || !window.YT.Player || !containerRef.current) return;
+
+        const player = new window.YT.Player(containerRef.current, {
+            videoId: videoId,
+            playerVars: {
+                autoplay: 1,
+                controls: 0,
+                showinfo: 0,
+                rel: 0,
+                iv_load_policy: 3,
+                modestbranding: 1,
+                loop: 1,
+                playlist: videoId,
+                playsinline: 1,
+            },
+            events: {
+                onReady: (event: any) => {
+                    onPlayerReady(event.target);
+                },
+                onStateChange,
+                onError,
+            }
+        });
+
+        return () => {
+            if (player && typeof player.destroy === 'function') {
+                player.destroy();
+            }
+        };
+    }, [videoId, onPlayerReady, onStateChange, onError]);
+
+    return <div ref={containerRef} className="w-full h-full pointer-events-none" />;
+});
 
 export const DetailsModal: React.FC<{ item: Movie, onClose: () => void }> = ({ item, onClose }) => {
     const { t } = useTranslation();
@@ -124,7 +261,6 @@ export const DetailsModal: React.FC<{ item: Movie, onClose: () => void }> = ({ i
     const [isAdMuted, setIsAdMuted] = useState(true);
     const adEverPlayedRef = useRef(false);
     const playerRef = useRef<YTPlayer | null>(null);
-    const playerContainerId = useMemo(() => `details-modal-player-${item.id}-${Math.random().toString(36).substring(7)}`, [item.id]);
 
     const modalRef = useRef<HTMLDivElement>(null);
     const scrollContainerRef = useRef<HTMLDivElement>(null);
@@ -148,84 +284,59 @@ export const DetailsModal: React.FC<{ item: Movie, onClose: () => void }> = ({ i
         };
     }, []);
 
-    // YouTube IFrame Player API logic
+    const handlePlayerReady = useCallback((player: YTPlayer) => {
+        playerRef.current = player;
+        player.mute();
+        setIsAdMuted(true);
+        player.playVideo();
+    }, []);
+
+    const handlePlayerStateChange = useCallback((event: { data: number }) => {
+        if (event.data === 1) {
+            adEverPlayedRef.current = true;
+            setIsAdPlaying(true);
+        }
+    }, []);
+
+    const handlePlayerError = useCallback(() => {
+        setShowAd(false);
+        setIsAdPlaying(false);
+    }, []);
+
     useEffect(() => {
-        if (!showAd || !details?.videos?.results || !isYtApiReady) {
-            return;
-        }
-
-        const trailer =
-            details.videos.results.find((v: any) => v.type === 'Trailer' && v.site === 'YouTube') ||
-            details.videos.results.find((v: any) => v.type === 'Teaser' && v.site === 'YouTube') ||
-            details.videos.results.find((v: any) => v.site === 'YouTube');
-
-        if (!trailer?.key || document.getElementById(playerContainerId)?.querySelector('iframe')) {
-            return;
-        }
-        
-        let player: YTPlayer | null = null;
-        player = new window.YT.Player(playerContainerId, {
-            videoId: trailer.key,
-            playerVars: {
-                autoplay: 1,
-                controls: 0,
-                showinfo: 0,
-                rel: 0,
-                iv_load_policy: 3,
-                modestbranding: 1,
-                loop: 1,
-                playlist: trailer.key,
-                playsinline: 1,
-            },
-            events: {
-                onReady: (event: { target: YTPlayer }) => {
-                    playerRef.current = event.target;
-                    event.target.mute();
-                    setIsAdMuted(true);
-                    event.target.playVideo();
-                },
-                onStateChange: (event: { data: number }) => {
-                    // 1 === YT.PlayerState.PLAYING: reveal the trailer only now
-                    if (event.data === 1) {
-                        adEverPlayedRef.current = true;
-                        setIsAdPlaying(true);
-                    }
-                },
-                onError: () => {
-                    // Trailer failed (blocked/unavailable on this device):
-                    // silently fall back to the backdrop image.
+        if (showAd && !isAdPlaying) {
+            const watchdog = setTimeout(() => {
+                if (!adEverPlayedRef.current) {
                     setShowAd(false);
                     setIsAdPlaying(false);
-                },
-            }
-        });
+                }
+            }, 30000);
+            return () => clearTimeout(watchdog);
+        }
+    }, [showAd, isAdPlaying]);
 
-        // Watchdog: if the trailer never starts within 30s (common on TVs),
-        // remove it and keep the clean backdrop image instead.
-        const watchdog = setTimeout(() => {
-            if (!adEverPlayedRef.current) {
-                setShowAd(false);
-                setIsAdPlaying(false);
-            }
-        }, 30000);
-
-        return () => {
-            clearTimeout(watchdog);
-            if (player && typeof player.destroy === 'function') {
-                player.destroy();
-            }
-            playerRef.current = null;
-            setIsAdPlaying(false);
-        };
-    }, [showAd, details, playerContainerId, isYtApiReady]);
 
     const handleToggleAdMute = () => {
-        if (playerRef.current && typeof playerRef.current.isMuted === 'function') {
-            if (playerRef.current.isMuted()) {
-                playerRef.current.unMute();
+        if (playerRef.current) {
+            const isMutedNow = typeof playerRef.current.isMuted === 'function' ? playerRef.current.isMuted() : isAdMuted;
+            if (isMutedNow) {
+                if (typeof playerRef.current.unMute === 'function') {
+                    playerRef.current.unMute();
+                }
+                if (typeof playerRef.current.setVolume === 'function') {
+                    playerRef.current.setVolume(100);
+                }
                 setIsAdMuted(false);
+                // Only call play if the video is not already in playing state (state 1 === YT.PlayerState.PLAYING)
+                if (typeof playerRef.current.getPlayerState === 'function') {
+                    if (playerRef.current.getPlayerState() !== 1 && typeof playerRef.current.playVideo === 'function') {
+                        playerRef.current.playVideo();
+                    }
+                }
             } else {
-                playerRef.current.mute();
+                if (typeof playerRef.current.mute === 'function') {
+                    playerRef.current.mute();
+                }
                 setIsAdMuted(true);
             }
         }
@@ -327,21 +438,34 @@ export const DetailsModal: React.FC<{ item: Movie, onClose: () => void }> = ({ i
                     if (e.key === 'ArrowRight') focusAndScroll(actions[(currentIndex + 1) % actions.length]);
                     else if (e.key === 'ArrowLeft') focusAndScroll(actions[(currentIndex - 1 + actions.length) % actions.length]);
                     else if (e.key === 'ArrowUp') focusAndScroll(getElement('[data-focus-group="top-right"][data-focus-index="0"]'));
-                    else if (e.key === 'ArrowDown') focusAndScroll(getElement('[data-focus-group="season-select"] button'));
+                    else if (e.key === 'ArrowDown') {
+                        const seasonSelect = getElement('[data-focus-group="season-select"] button');
+                        const firstEpisode = getElement('[data-focus-group="episodes"][data-focus-index="0"]');
+                        const firstSimilar = getElement('[data-focus-group="similar"][data-focus-index="0"]');
+                        if (seasonSelect) focusAndScroll(seasonSelect);
+                        else if (firstEpisode) focusAndScroll(firstEpisode);
+                        else if (firstSimilar) focusAndScroll(firstSimilar);
+                    }
                     break;
 
                 case 'season-select':
                     if (e.key === 'ArrowUp') focusAndScroll(getElement('[data-focus-group="main-actions"][data-focus-index="0"]'));
-                    else if (e.key === 'ArrowDown') focusAndScroll(getElement('[data-focus-group="episodes"][data-focus-index="0"]'));
+                    else if (e.key === 'ArrowDown') {
+                        const firstEpisode = getElement('[data-focus-group="episodes"][data-focus-index="0"]');
+                        const firstSimilar = getElement('[data-focus-group="similar"][data-focus-index="0"]');
+                        if (firstEpisode) focusAndScroll(firstEpisode);
+                        else if (firstSimilar) focusAndScroll(firstSimilar);
+                    }
                     break;
 
                 case 'episodes':
                     const episodes = Array.from(modalNode.querySelectorAll('[data-focus-group="episodes"]'));
                     if (e.key === 'ArrowDown') {
                         if (index < episodes.length - 1) focusAndScroll(getElement(`[data-focus-group="episodes"][data-focus-index="${index + 1}"]`));
+                        else focusAndScroll(getElement('[data-focus-group="similar"][data-focus-index="0"]'));
                     } else if (e.key === 'ArrowUp') {
                         if (index > 0) focusAndScroll(getElement(`[data-focus-group="episodes"][data-focus-index="${index - 1}"]`));
-                        else focusAndScroll(getElement('[data-focus-group="season-select"] button'));
+                        else focusAndScroll(getElement('[data-focus-group="season-select"] button') || getElement('[data-focus-group="main-actions"][data-focus-index="0"]'));
                     } else if (e.key === 'ArrowLeft') {
                         focusAndScroll(getElement('[data-focus-group="similar"][data-focus-index="0"]'));
                     } else if (e.key === 'ArrowRight') {
@@ -350,7 +474,7 @@ export const DetailsModal: React.FC<{ item: Movie, onClose: () => void }> = ({ i
                     break;
 
                 case 'similar':
-                    const similarContainer = getElement('#similar-section .grid');
+                    const similarContainer = getElement('#similar-section');
                     if (!similarContainer) break;
                     
                     const similarCards = Array.from(similarContainer.querySelectorAll('[data-focus-group="similar"]')).filter(el => (el as HTMLElement).offsetParent !== null) as HTMLElement[];
@@ -359,21 +483,20 @@ export const DetailsModal: React.FC<{ item: Movie, onClose: () => void }> = ({ i
                     const cardIndex = similarCards.indexOf(active);
                     if (cardIndex === -1) break;
 
-                    // Dynamically calculate items per row to handle responsive layouts
-                    const firstCardY = similarCards[0].getBoundingClientRect().top;
-                    const itemsPerRow = similarCards.filter(c => c.getBoundingClientRect().top === firstCardY).length || 1;
-
                     if (e.key === 'ArrowRight') {
-                        if ((cardIndex + 1) % itemsPerRow !== 0 && cardIndex < similarCards.length - 1) focusAndScroll(similarCards[cardIndex + 1]);
+                        if (cardIndex < similarCards.length - 1) focusAndScroll(similarCards[cardIndex + 1]);
                     } else if (e.key === 'ArrowLeft') {
-                        if (cardIndex % itemsPerRow !== 0) focusAndScroll(similarCards[cardIndex - 1]);
-                    } else if (e.key === 'ArrowDown') {
-                        const targetIdx = cardIndex + itemsPerRow;
-                        if (targetIdx < similarCards.length) focusAndScroll(similarCards[targetIdx]);
+                        if (cardIndex > 0) focusAndScroll(similarCards[cardIndex - 1]);
                     } else if (e.key === 'ArrowUp') {
-                        const targetIdx = cardIndex - itemsPerRow;
-                        if (targetIdx >= 0) focusAndScroll(similarCards[targetIdx]);
-                        else focusAndScroll(getElement('[data-focus-group="episodes"][data-focus-index="0"]'));
+                        const firstEpisode = getElement('[data-focus-group="episodes"][data-focus-index="0"]');
+                        if (firstEpisode) {
+                            focusAndScroll(firstEpisode);
+                        } else {
+                            focusAndScroll(getElement('[data-focus-group="main-actions"][data-focus-index="0"]'));
+                        }
+                    } else if (e.key === 'ArrowDown') {
+                        const isTV = typeof navigator !== 'undefined' && /SmartTV|Tizen|Web0S|AppleTV|AndroidTV|TV|PlayStation/i.test(navigator.userAgent);
+                        scrollContainerRef.current?.scrollBy({ top: 180, behavior: isTV ? 'auto' : 'smooth' });
                     }
                     break;
             }
@@ -515,12 +638,23 @@ export const DetailsModal: React.FC<{ item: Movie, onClose: () => void }> = ({ i
                                     alt={details.title || details.name}
                                     className="absolute inset-0 object-cover w-full h-full"
                                 />
-                                {showAd && details.videos?.results?.length ? (
+                                {showAd && details.videos?.results?.length && isYtApiReady ? (
                                     <div className={`absolute top-1/2 left-1/2 w-full h-full transform -translate-x-1/2 -translate-y-1/2 scale-125 transition-opacity duration-500 ${isAdPlaying ? 'opacity-100' : 'opacity-0 pointer-events-none'}`}>
-                                        <div
-                                            id={playerContainerId}
-                                            className="w-full h-full pointer-events-none"
-                                        />
+                                        {(() => {
+                                            const trailer =
+                                                details.videos.results.find((v: any) => v.type === 'Trailer' && v.site === 'YouTube') ||
+                                                details.videos.results.find((v: any) => v.type === 'Teaser' && v.site === 'YouTube') ||
+                                                details.videos.results.find((v: any) => v.site === 'YouTube');
+                                            
+                                            return trailer?.key ? (
+                                                <YoutubeTrailerPlayer
+                                                    videoId={trailer.key}
+                                                    onPlayerReady={handlePlayerReady}
+                                                    onStateChange={handlePlayerStateChange}
+                                                    onError={handlePlayerError}
+                                                />
+                                            ) : null;
+                                        })()}
                                         <div className="absolute inset-0" />
                                     </div>
                                 ) : null}
@@ -619,14 +753,7 @@ export const DetailsModal: React.FC<{ item: Movie, onClose: () => void }> = ({ i
                                 )}
 
                                 {details.recommendations?.results && details.recommendations.results.length > 0 && (
-                                    <div className="mt-10" id="similar-section">
-                                        <h2 className="text-2xl font-bold mb-4 focusable" tabIndex={-1}>{t('similar')}</h2>
-                                        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4">
-                                            {details.recommendations.results.filter(r => r.backdrop_path).slice(0, 9).map((rec, index) => (
-                                                <RecommendationCard key={rec.id} item={rec} dataFocusGroup="similar" dataFocusIndex={index}/>
-                                            ))}
-                                        </div>
-                                    </div>
+                                    <SimilarRow movies={details.recommendations.results} />
                                 )}
                             </div>
                         </div>
