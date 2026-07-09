@@ -1,4 +1,10 @@
 
+import { installNativeBackend } from './services/nativeBackend';
+
+// MUST run before anything else so all /api requests inside the
+// Capacitor APK are routed to the public backend.
+installNativeBackend();
+
 import React from 'react';
 import ReactDOM from 'react-dom/client';
 import App from './App';
