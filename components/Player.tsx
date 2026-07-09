@@ -1533,7 +1533,7 @@ const VideoPlayer: React.FC<PlayerProps> = ({ item, itemType, initialSeason, ini
             // Our own backend proxy URLs must never be wrapped in an external
             // proxy (it breaks relative URLs). They self-heal server-side,
             // so a simple delayed reload is the correct recovery.
-            const isInternalUrl = activeStreamUrl.startsWith('/api/') || activeStreamUrl.startsWith(window.location.origin);
+            const isInternalUrl = activeStreamUrl.startsWith('/api/') || activeStreamUrl.startsWith(window.location.origin) || activeStreamUrl.startsWith('https://movie3-one.vercel.app') || activeStreamUrl.startsWith('https://www.vetflix.store');
             hls.on(Hls.default.Events.ERROR, (event, data) => {
                 if (data.fatal) {
                     switch (data.type) {

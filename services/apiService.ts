@@ -8,6 +8,14 @@ import type { GoogleGenAI as GoogleGenAIType } from "@google/genai";
 import { TMDB_API_KEY, TMDB_BASE_URL, SCRAPER_API_URL, AVAILABLE_PROVIDERS } from '../contexts/constants';
 import { Movie, SubtitleTrack, StreamLink, StreamData } from '../types';
 
+// Public working backend (same deployed project). VidSrc extraction and its
+// stream/subtitle proxies MUST be fetched directly from this domain so the
+// backend builds its worker fallback (fb=) against a PUBLIC host, not a
+// password-protected preview deployment (which returns HTML instead of video).
+const PUBLIC_BACKEND = 'https://movie3-one.vercel.app';
+const toBackendUrl = (pathOrUrl: string): string =>
+    pathOrUrl && pathOrUrl.startsWith('/') ? `${PUBLIC_BACKEND}${pathOrUrl}` : pathOrUrl;
+
 const fetchWithTimeout = async (resource: RequestInfo, options: RequestInit & { timeout?: number } = {}) => {
   const { timeout = 15000, ...fetchOptions } = options; // Increased default timeout for scraper
   const controller = new AbortController();
@@ -71,7 +79,7 @@ export const fetchStreamUrl = async (
     serverPreferences: string[] = [],
     dubLang?: 'ar' | 'fr' | null
 ): Promise<StreamData & { provider: string }> => {
-    const cacheKey = `stream_cache_v4_${media_type}_${item.id}${season ? `_s${season}`:''}${episode ? `_e${episode}`:''}${specificProvider ? `_p${specificProvider}`: '_p_auto'}${dubLang ? `_d${dubLang}`: ''}`;
+    const cacheKey = `stream_cache_v5_${media_type}_${item.id}${season ? `_s${season}`:''}${episode ? `_e${episode}`:''}${specificProvider ? `_p${specificProvider}`: '_p_auto'}${dubLang ? `_d${dubLang}`: ''}`;
     try {
         const cachedItem = localStorage.getItem(cacheKey);
         if (cachedItem) {
@@ -154,7 +162,7 @@ export const fetchStreamUrl = async (
                     if (episode) vsParams.append('episode', String(episode));
                 }
 
-                const vsData: any = await fetchWithHeaders(`/api/vs-extract?${vsParams.toString()}`);
+                const vsData: any = await fetchWithHeaders(`${PUBLIC_BACKEND}/api/vs-extract?${vsParams.toString()}`);
                 if (!vsData || vsData.success !== true) {
                     throw new Error('VidSrc: no stream found');
                 }
@@ -164,7 +172,10 @@ export const fetchStreamUrl = async (
                 }
 
                 const vsResult: StreamData & { provider: string } = {
-                    links: [{ quality: 'Auto', url: vsFirst.hls_url }],
+                    // The backend returns a relative /api/vs-proxy/... URL.
+                    // Make it absolute on the public backend so the playlist
+                    // (and its fb= worker fallback) is served from a public host.
+                    links: [{ quality: 'Auto', url: toBackendUrl(vsFirst.hls_url) }],
                     provider: provider.name,
                 };
 
@@ -189,7 +200,7 @@ export const fetchStreamUrl = async (
                             return {
                                 display: label,
                                 language: code,
-                                url: `/api/vs-sub?url=${encodeURIComponent(s.url)}`,
+                                url: `${PUBLIC_BACKEND}/api/vs-sub?url=${encodeURIComponent(s.url)}`,
                                 filename: s.filename,
                                 release: s.release,
                                 downloads: s.downloads,
